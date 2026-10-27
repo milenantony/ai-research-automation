@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from app.dependencies import get_db
+from app.models.research_job import ResearchJob
 from app.schemas.research import (
     ResearchJobCreate,
     ResearchJobResponse,
@@ -14,9 +16,6 @@ router = APIRouter(
     tags=["Research Jobs"],
 )
 
-# Temporary storage; PostgreSQL will replace this.
-research_jobs: dict[str, ResearchJobResponse] = {}
-
 
 @router.post(
     "",
@@ -24,16 +23,17 @@ research_jobs: dict[str, ResearchJobResponse] = {}
     status_code=status.HTTP_201_CREATED,
 )
 def create_research_job(
-request: ResearchJobCreate,) -> ResearchJobResponse:
-
-    job = ResearchJobResponse(
-        id=uuid4(),
+    request: ResearchJobCreate,
+    db: Session = Depends(get_db),
+) -> ResearchJob:
+    job = ResearchJob(
         topic=request.topic,
-        status=ResearchJobStatus.PENDING,
-        created_at=datetime.now(timezone.utc),
+        status=ResearchJobStatus.PENDING.value,
     )
 
-    research_jobs[str(job.id)] = job
+    db.add(job)
+    db.commit()
+    db.refresh(job)
 
     return job
 
@@ -42,9 +42,11 @@ request: ResearchJobCreate,) -> ResearchJobResponse:
     "/{job_id}",
     response_model=ResearchJobResponse,
 )
-def get_research_job(job_id: str) -> ResearchJobResponse:
-
-    job = research_jobs.get(job_id)
+def get_research_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> ResearchJob:
+    job = db.get(ResearchJob, job_id)
 
     if job is None:
         raise HTTPException(

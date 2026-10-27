@@ -1,11 +1,4 @@
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-client = TestClient(app)
-
-
-def test_create_research_job():
+def test_create_research_job(client):
     response = client.post(
         "/research-jobs",
         json={
@@ -23,13 +16,15 @@ def test_create_research_job():
     assert "created_at" in data
 
 
-def test_get_research_job():
+def test_get_research_job(client):
     create_response = client.post(
         "/research-jobs",
         json={
             "topic": "AI applications in medical research"
         },
     )
+
+    assert create_response.status_code == 201
 
     job_id = create_response.json()["id"]
 
@@ -39,7 +34,7 @@ def test_get_research_job():
     assert response.json()["id"] == job_id
 
 
-def test_create_research_job_with_invalid_topic():
+def test_create_research_job_with_invalid_topic(client):
     response = client.post(
         "/research-jobs",
         json={
@@ -50,7 +45,7 @@ def test_create_research_job_with_invalid_topic():
     assert response.status_code == 422
 
 
-def test_get_nonexistent_research_job():
+def test_get_nonexistent_research_job(client):
     response = client.get(
         "/research-jobs/00000000-0000-4000-8000-000000000000"
     )
