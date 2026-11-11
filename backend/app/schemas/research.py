@@ -19,6 +19,13 @@ class ResearchJobCreate(BaseModel):
         max_length=500,
         description="The academic research topic",
     )
+class ResearchJobUpdate(BaseModel):
+    topic: str = Field(
+        min_length=5,
+        max_length=500,
+        description="The updated academic research topic",
+    )
+
 
 
 class ResearchJobResponse(BaseModel):

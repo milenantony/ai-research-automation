@@ -12,6 +12,7 @@ from app.schemas.research import (
     ResearchJobCreate,
     ResearchJobResponse,
     ResearchJobStatus,
+    ResearchJobUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,3 +100,95 @@ def get_research_job(
     )
 
     return job
+
+@router.put(
+    "/{job_id}",
+    response_model=ResearchJobResponse,
+    status_code=status.HTTP_200_OK,
+)
+def update_research_job(
+    job_id: UUID,
+    request: ResearchJobUpdate,
+    db: Session = Depends(get_db),
+) -> ResearchJob:
+
+    try:
+        job = db.get(ResearchJob, job_id)
+
+        if job is None:
+            logger.warning(
+                "Research job not found for update: %s",
+                job_id,
+            )
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Research job not found",
+            )
+
+        job.topic = request.topic
+
+        db.commit()
+        db.refresh(job)
+
+        logger.info(
+            "Research job updated successfully: %s",
+            job.id,
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+
+        logger.exception("Failed to update research job")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update research job",
+        )
+
+    return job
+
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_research_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> None:
+
+    try:
+        job = db.get(ResearchJob, job_id)
+
+        if job is None:
+            logger.warning(
+                "Research job not found for deletion: %s",
+                job_id,
+            )
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Research job not found",
+            )
+
+        db.delete(job)
+        db.commit()
+
+        logger.info(
+            "Research job deleted successfully: %s",
+            job_id,
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+
+        logger.exception("Failed to delete research job")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete research job",
+        )
+
+    return None
+
+
