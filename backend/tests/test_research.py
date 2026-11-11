@@ -298,3 +298,66 @@ def test_delete_research_job_database_failure(
     assert response.json()["detail"] == "Failed to delete research job"
 
     rollback_mock.assert_called_once()
+
+def test_get_research_jobs_default_pagination(client):
+    response = client.get("/research-jobs")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_get_research_jobs_custom_pagination(client):
+    response = client.get(
+        "/research-jobs?skip=0&limit=5"
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 5
+
+
+def test_get_research_jobs_invalid_skip(client):
+    response = client.get(
+        "/research-jobs?skip=-1"
+    )
+
+    assert response.status_code == 422
+
+def test_get_research_jobs_invalid_limit(client):
+    response = client.get(
+        "/research-jobs?limit=101"
+    )
+
+    assert response.status_code == 422
+
+def test_get_research_jobs_filter_by_status(client):
+    client.post(
+        "/research-jobs",
+        json={"topic": "AI in healthcare"}
+    )
+
+    response = client.get(
+        "/research-jobs?status=PENDING"
+    )
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    for job in response.json():
+        assert job["status"] == "PENDING"
+
+
+def test_get_research_jobs_filter_no_results(client):
+    response = client.get(
+        "/research-jobs?status=COMPLETED"
+    )
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_get_research_jobs_invalid_status(client):
+    response = client.get(
+        "/research-jobs?status=INVALID"
+    )
+
+    assert response.status_code == 422

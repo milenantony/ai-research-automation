@@ -2,7 +2,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status ,Query
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -60,6 +60,56 @@ def create_research_job(
 
     return job
 
+
+@router.get(
+    "",
+    response_model=list[ResearchJobResponse],
+)
+def get_research_jobs(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+    job_status: ResearchJobStatus | None = Query(
+        default=None,
+        alias="status",
+    ),
+    db: Session = Depends(get_db),
+) -> list[ResearchJob]:
+
+    try:
+        query = db.query(ResearchJob)
+
+        if job_status is not None:
+            query = query.filter(
+                ResearchJob.status == job_status.value
+            )
+
+        jobs = (
+            query
+            .order_by(ResearchJob.id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+
+        logger.exception("Failed to retrieve research jobs")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research jobs",
+        )
+
+    logger.info(
+        "Retrieved %s research jobs (skip=%s, limit=%s, status=%s)",
+        len(jobs),
+        skip,
+        limit,
+        job_status.value if job_status else "ALL",
+    )
+
+    return jobs
 
 @router.get(
     "/{job_id}",
