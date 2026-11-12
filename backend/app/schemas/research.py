@@ -26,10 +26,20 @@ class ResearchJobUpdate(BaseModel):
         description="The updated academic research topic",
     )
 
-
-
 class ResearchJobResponse(BaseModel):
     id: UUID
     topic: str
     status: ResearchJobStatus
     created_at: datetime
+
+class ResearchSummaryRequest(BaseModel):
+    research_context: str = Field(
+        min_length=1,
+        description="Research material used to generate the summary",
+    )
+
+
+class ResearchSummaryResponse(BaseModel):
+    job_id: UUID
+    topic: str
+    summary: str

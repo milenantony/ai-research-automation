@@ -1,4 +1,4 @@
-
+from app.services.research_workflow import ResearchWorkflow
 import logging
 from uuid import UUID
 
@@ -13,6 +13,8 @@ from app.schemas.research import (
     ResearchJobResponse,
     ResearchJobStatus,
     ResearchJobUpdate,
+    ResearchSummaryRequest,
+    ResearchSummaryResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -241,4 +243,85 @@ def delete_research_job(
 
     return None
 
+@router.post(
+    "/{job_id}/generate-summary",
+    response_model=ResearchSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_research_summary(
+    job_id: UUID,
+    request: ResearchSummaryRequest,
+    db: Session = Depends(get_db),
+) -> ResearchSummaryResponse:
+
+    # Step 1: Find the research job
+    try:
+        job = db.get(ResearchJob, job_id)
+
+    except SQLAlchemyError:
+        db.rollback()
+
+        logger.exception(
+            "Failed to retrieve research job for summary generation"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research job",
+        )
+
+    # Step 2: Check whether the job exists
+    if job is None:
+        logger.warning(
+            "Research job not found for summary generation: %s",
+            job_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Research job not found",
+        )
+
+    # Step 3: Generate the summary using ResearchWorkflow
+    try:
+        workflow = ResearchWorkflow()
+
+        summary = workflow.generate_summary(
+            topic=job.topic,
+            research_context=request.research_context,
+        )
+
+    except ValueError as exc:
+        logger.warning(
+            "Invalid summary generation request: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to generate research summary for job: %s",
+            job_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate research summary",
+        )
+
+    # Step 4: Return the generated summary
+    logger.info(
+        "Research summary generated successfully for job: %s",
+        job_id,
+    )
+
+    return ResearchSummaryResponse(
+        job_id=job.id,
+        topic=job.topic,
+        summary=summary,
+    )
 
