@@ -5,3 +5,5 @@ httpx
 sqlalchemy
 psycopg[binary]
 python-dotenv
+openai
+google-genai
