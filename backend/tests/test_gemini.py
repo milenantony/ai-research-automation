@@ -1,9 +1,7 @@
-
 import pytest
 from unittest.mock import MagicMock, patch
-
+from app.services.llm_exceptions import LLMProviderError
 from app.services.providers.gemini import GeminiProvider
-
 
 def test_missing_api_key():
     with patch.dict("os.environ", {}, clear=True):
@@ -12,7 +10,6 @@ def test_missing_api_key():
             match="GEMINI_API_KEY is missing"
         ):
             GeminiProvider()
-
 
 @patch("app.services.providers.gemini.genai.Client")
 def test_provider_initialization(mock_client):
@@ -112,6 +109,7 @@ def test_empty_gemini_response(mock_client):
         provider.generate_response("Test prompt")
 
 
+
 @patch("app.services.providers.gemini.genai.Client")
 def test_gemini_api_error(mock_client):
     mock_client.return_value.models.generate_content.side_effect = (
@@ -126,7 +124,12 @@ def test_gemini_api_error(mock_client):
         provider = GeminiProvider()
 
     with pytest.raises(
-        RuntimeError,
-        match="API connection failed"
-    ):
+        LLMProviderError,
+        match="Gemini API request failed"
+    ) as exc_info:
         provider.generate_response("Test prompt")
+
+    # Verify original exception is preserved
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+    assert str(exc_info.value.__cause__) == "API connection failed"

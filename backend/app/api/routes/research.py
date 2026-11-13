@@ -1,11 +1,9 @@
 from app.services.research_workflow import ResearchWorkflow
 import logging
 from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, status ,Query
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-
 from app.dependencies import get_db
 from app.models.research_job import ResearchJob
 from app.schemas.research import (
@@ -15,6 +13,10 @@ from app.schemas.research import (
     ResearchJobUpdate,
     ResearchSummaryRequest,
     ResearchSummaryResponse,
+)
+from app.services.llm_exceptions import (
+    LLMConfigurationError,
+    LLMProviderError,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +250,7 @@ def delete_research_job(
     response_model=ResearchSummaryResponse,
     status_code=status.HTTP_200_OK,
 )
+
 def generate_research_summary(
     job_id: UUID,
     request: ResearchSummaryRequest,
@@ -291,6 +294,29 @@ def generate_research_summary(
             research_context=request.research_context,
         )
 
+
+    except LLMConfigurationError:
+        logger.exception(
+            "LLM configuration error for research job: %s",
+            job_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="LLM configuration error",
+        )
+
+    except LLMProviderError:
+        logger.exception(
+            "LLM provider error for research job: %s",
+            job_id,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM provider request failed",
+        )
+
     except ValueError as exc:
         logger.warning(
             "Invalid summary generation request: %s",
@@ -304,7 +330,7 @@ def generate_research_summary(
 
     except Exception:
         logger.exception(
-            "Failed to generate research summary for job: %s",
+            "Unexpected error generating research summary for job: %s",
             job_id,
         )
 

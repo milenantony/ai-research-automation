@@ -1,5 +1,10 @@
 from unittest.mock import Mock
 from sqlalchemy.exc import SQLAlchemyError
+from app.services.llm_exceptions import (
+    LLMConfigurationError,
+    LLMProviderError,
+)
+from app.services.research_workflow import ResearchWorkflow
 
 
 
@@ -361,3 +366,119 @@ def test_get_research_jobs_invalid_status(client):
     )
 
     assert response.status_code == 422
+
+
+def test_generate_summary_configuration_error(client, monkeypatch):
+    create_response = client.post(
+        "/research-jobs",
+        json={"topic": "AI applications in healthcare research"},
+    )
+
+    job_id = create_response.json()["id"]
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "__init__",
+        lambda self: None,
+    )
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "generate_summary",
+        Mock(side_effect=LLMConfigurationError("Missing API key")),
+    )
+
+    response = client.post(
+        f"/research-jobs/{job_id}/generate-summary",
+        json={"research_context": "Research findings about AI in healthcare."},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "LLM configuration error"
+
+
+def test_generate_summary_provider_error(client, monkeypatch):
+    create_response = client.post(
+        "/research-jobs",
+        json={"topic": "AI applications in healthcare research"},
+    )
+
+    job_id = create_response.json()["id"]
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "__init__",
+        lambda self: None,
+    )
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "generate_summary",
+        Mock(side_effect=LLMProviderError("Gemini API unavailable")),
+    )
+
+    response = client.post(
+        f"/research-jobs/{job_id}/generate-summary",
+        json={"research_context": "Research findings about AI in healthcare."},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "LLM provider request failed"
+
+
+def test_generate_summary_value_error(client, monkeypatch):
+    create_response = client.post(
+        "/research-jobs",
+        json={"topic": "AI applications in healthcare research"},
+    )
+
+    job_id = create_response.json()["id"]
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "__init__",
+        lambda self: None,
+    )
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "generate_summary",
+        Mock(side_effect=ValueError("Invalid research context")),
+    )
+
+    response = client.post(
+        f"/research-jobs/{job_id}/generate-summary",
+        json={"research_context": "Research findings about AI in healthcare."},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid research context"
+
+
+def test_generate_summary_unexpected_error(client, monkeypatch):
+    create_response = client.post(
+        "/research-jobs",
+        json={"topic": "AI applications in healthcare research"},
+    )
+
+    job_id = create_response.json()["id"]
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "__init__",
+        lambda self: None,
+    )
+
+    monkeypatch.setattr(
+        ResearchWorkflow,
+        "generate_summary",
+        Mock(side_effect=Exception("Unexpected failure")),
+    )
+
+    response = client.post(
+        f"/research-jobs/{job_id}/generate-summary",
+        json={"research_context": "Research findings about AI in healthcare."},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Failed to generate research summary"

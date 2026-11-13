@@ -1,8 +1,6 @@
-
 import os
-
 from app.services.providers.gemini import GeminiProvider
-
+from app.services.llm_exceptions import LLMConfigurationError
 
 class LLMService:
     def __init__(self):
@@ -14,7 +12,7 @@ class LLMService:
         if provider_name == "gemini":
             self.provider = GeminiProvider()
         else:
-            raise ValueError(
+            raise LLMConfigurationError(
                 f"Unsupported LLM provider: {provider_name}"
             )
 
