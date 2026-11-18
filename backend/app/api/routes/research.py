@@ -13,11 +13,20 @@ from app.schemas.research import (
     ResearchJobUpdate,
     ResearchSummaryRequest,
     ResearchSummaryResponse,
+    ResearchPaperResponse,
+    PaperSearchRequest,
 )
 from app.services.llm_exceptions import (
     LLMConfigurationError,
     LLMProviderError,
 )
+from app.models.research_job_papers import research_job_papers
+from app.models.research_paper import ResearchPaper
+from app.services.paper_retrieval_service import (
+    PaperRetrievalError,
+    PaperRetrievalService,
+)
+from app.services.paper_service import PaperService
 
 logger = logging.getLogger(__name__)
 
@@ -351,3 +360,82 @@ def generate_research_summary(
         summary=summary,
     )
 
+@router.get(
+    "/{job_id}/papers",
+    response_model=list[ResearchPaperResponse],
+)
+def list_research_job_papers(
+    job_id: UUID,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[ResearchPaper]:
+    try:
+        if db.get(ResearchJob, job_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Research job not found",
+            )
+
+        return (
+            db.query(ResearchPaper)
+            .join(
+                research_job_papers,
+                ResearchPaper.id == research_job_papers.c.paper_id,
+            )
+            .filter(research_job_papers.c.job_id == job_id)
+            .order_by(ResearchPaper.id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Failed to list papers for research job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research papers",
+        )
+@router.post(
+    "/{job_id}/papers:search",
+    response_model=list[ResearchPaperResponse],
+)
+async def search_research_job_papers(
+    job_id: UUID,
+    request: PaperSearchRequest,
+    db: Session = Depends(get_db),
+) -> list[ResearchPaperResponse]:
+    job = get_research_job(job_id=job_id, db=db)
+
+    try:
+        papers = await PaperRetrievalService().search_and_save(
+            db=db,
+            topic=job.topic,
+            max_results=request.max_results,
+        )
+
+        unique_papers = {paper.id: paper for paper in papers}
+        PaperService.link_papers_to_job(db, job_id, unique_papers.values())
+        response = [
+            ResearchPaperResponse.model_validate(paper)
+            for paper in unique_papers.values()
+        ]
+        db.commit()
+        return response
+
+    except PaperRetrievalError as exc:
+        db.rollback()
+        logger.warning("Paper retrieval failed for job %s: %s", job_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="All paper retrieval providers failed",
+        ) from exc
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to save papers for research job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save research job papers",
+        ) from exc

@@ -1,3 +1,6 @@
+from uuid import UUID
+
+from app.models.research_job_papers import research_job_papers
 
 from typing import Iterable
 
@@ -52,3 +55,18 @@ class PaperService:
             saved_papers.append(existing_paper)
 
         return saved_papers
+    @staticmethod
+    def link_papers_to_job(
+        db: Session,
+        job_id: UUID,
+        papers: Iterable[ResearchPaper],
+    ) -> None:
+        """Link retrieved papers to a research job."""
+        links = [{"job_id": job_id, "paper_id": paper.id} for paper in papers]
+        if not links:
+            return
+
+        statement = insert(research_job_papers).on_conflict_do_nothing(
+            index_elements=["job_id", "paper_id"],
+        )
+        db.execute(statement, links)

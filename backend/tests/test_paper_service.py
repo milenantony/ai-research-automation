@@ -9,6 +9,8 @@ from app.models.research_paper import ResearchPaper
 from app.services.paper_retrieval.arxiv import ArxivPaper
 from app.services.paper_service import PaperService
 from app.services.paper_retrieval.semantic_scholar import SemanticScholarPaper
+from app.models.research_job import ResearchJob
+from app.models.research_job_papers import research_job_papers
 
 
 def make_arxiv_paper():
@@ -140,3 +142,21 @@ def test_save_paper_database_failure(db_session):
 
     assert len(saved) == 1
     assert saved[0].title == valid_paper.title
+def test_link_shared_paper_once_per_job(db_session):
+    first_job = ResearchJob(topic="Machine learning in healthcare")
+    second_job = ResearchJob(topic="Clinical applications of AI")
+    db_session.add_all([first_job, second_job])
+    db_session.flush()
+
+    papers = PaperService.save_papers(db_session, [make_arxiv_paper()])
+    PaperService.link_papers_to_job(db_session, first_job.id, papers)
+    PaperService.link_papers_to_job(db_session, first_job.id, papers)
+    PaperService.link_papers_to_job(db_session, second_job.id, papers)
+
+    linked_job_ids = db_session.scalars(
+        select(research_job_papers.c.job_id)
+        .where(research_job_papers.c.paper_id == papers[0].id)
+    ).all()
+
+    assert len(linked_job_ids) == 2
+    assert set(linked_job_ids) == {first_job.id, second_job.id}

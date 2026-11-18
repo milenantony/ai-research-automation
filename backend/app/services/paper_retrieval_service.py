@@ -16,6 +16,9 @@ from app.services.paper_retrieval.semantic_scholar import (
 
 logger = logging.getLogger(__name__)
 
+class PaperRetrievalError(RuntimeError):
+    """All paper retrieval providers failed."""
+
 
 class PaperRetrievalService:
     def __init__(
@@ -86,9 +89,7 @@ class PaperRetrievalService:
             papers.extend(result)
 
         if len(failures) == 2:
-            raise RuntimeError(
-                "All paper retrieval providers failed."
-            )
+           raise PaperRetrievalError("All paper retrieval providers failed.")
         return papers
     async def search_and_save(
         self,
