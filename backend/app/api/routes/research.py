@@ -295,14 +295,22 @@ def generate_research_summary(
         )
 
     # Step 3: Generate the summary using ResearchWorkflow
+    return _generate_summary(job, request.research_context)
+
+
+def _generate_summary(
+    job: ResearchJob,
+    research_context: str,
+) -> ResearchSummaryResponse:
+    job_id = job.id
+
     try:
         workflow = ResearchWorkflow()
-
         summary = workflow.generate_summary(
             topic=job.topic,
-            research_context=request.research_context,
+            research_context=research_context,
         )
-
+        
 
     except LLMConfigurationError:
         logger.exception(
@@ -378,13 +386,7 @@ def list_research_job_papers(
             )
 
         return (
-            db.query(ResearchPaper)
-            .join(
-                research_job_papers,
-                ResearchPaper.id == research_job_papers.c.paper_id,
-            )
-            .filter(research_job_papers.c.job_id == job_id)
-            .order_by(ResearchPaper.id)
+            PaperService.papers_for_job(db, job_id)
             .offset(skip)
             .limit(limit)
             .all()
@@ -439,3 +441,33 @@ async def search_research_job_papers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save research job papers",
         ) from exc
+@router.post(
+    "/{job_id}/papers:generate-summary",
+    response_model=ResearchSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_linked_paper_summary(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> ResearchSummaryResponse:
+    job = get_research_job(job_id=job_id, db=db)
+
+    try:
+        papers = PaperService.papers_for_job(db, job_id).all()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Failed to load papers for research job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research papers",
+        )
+
+    try:
+        context = ResearchWorkflow.build_paper_context(papers)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return _generate_summary(job, context)

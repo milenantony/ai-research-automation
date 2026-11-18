@@ -1,10 +1,26 @@
 
 from app.services.llm_service import LLMService
+from app.models.research_paper import ResearchPaper
 
 
 class ResearchWorkflow:
     def __init__(self, llm_service=None):
         self.llm_service = llm_service or LLMService()
+
+    @staticmethod
+    def build_paper_context(papers: list[ResearchPaper]) -> str:
+        if not papers:
+            raise ValueError("No papers are linked to this research job")
+
+        sections = []
+        for number, paper in enumerate(papers, start=1):
+            abstract = (paper.abstract or "").strip()
+            sections.append(
+                f"Paper {number}: {paper.title}\n"
+                f"Abstract: {abstract or 'No abstract available.'}"
+            )
+
+        return "\n\n".join(sections)
 
     def generate_summary(
         self,

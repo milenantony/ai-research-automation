@@ -193,3 +193,88 @@ def test_search_returns_502_when_both_providers_fail(client, monkeypatch):
     listing = client.get(path)
     assert listing.status_code == 200, listing.text
     assert listing.json() == []
+def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
+    from app.services.llm_service import LLMService
+
+    def make_paper(external_id, title, abstract):
+        return ArxivPaper(
+            external_id=external_id,
+            title=title,
+            abstract=abstract,
+            authors=[],
+            published_date=None,
+            paper_url=None,
+            pdf_url=None,
+            doi=None,
+        )
+
+    solar = make_paper("summary-solar", "Solar study", "Cloud cover affects irradiance.")
+    wind = make_paper("summary-wind", "Wind study", "Turbine height affects output.")
+
+    monkeypatch.setattr(
+        ArxivClient, "search", AsyncMock(side_effect=[[solar], [wind]])
+    )
+    monkeypatch.setattr(SemanticScholarClient, "search", AsyncMock(return_value=[]))
+
+    prompts = []
+
+    def capture_prompt(self, prompt):
+        prompts.append(prompt)
+        return "Summary of the solar study."
+
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    monkeypatch.setattr(LLMService, "generate", capture_prompt)
+
+    job_ids = []
+    for topic in ("Solar forecasting", "Wind forecasting"):
+        job = client.post("/research-jobs", json={"topic": topic})
+        assert job.status_code == 201, job.text
+        job_id = job.json()["id"]
+        search = client.post(
+            f"/research-jobs/{job_id}/papers:search", json={"max_results": 1}
+        )
+        assert search.status_code == 200, search.text
+        job_ids.append(job_id)
+
+    response = client.post(f"/research-jobs/{job_ids[0]}/papers:generate-summary")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "job_id": job_ids[0],
+        "topic": "Solar forecasting",
+        "summary": "Summary of the solar study.",
+    }
+    assert len(prompts) == 1
+    assert solar.title in prompts[0]
+    assert solar.abstract in prompts[0]
+    assert wind.title not in prompts[0]
+    assert wind.abstract not in prompts[0]
+@pytest.mark.parametrize(
+    ("job_exists", "expected_status", "expected_detail"),
+    [
+        (True, 400, "No papers are linked to this research job"),
+        (False, 404, "Research job not found"),
+    ],
+    ids=["empty-job", "missing-job"],
+)
+def test_linked_summary_requires_job_and_papers(
+    client, monkeypatch, job_exists, expected_status, expected_detail
+):
+    from app.services.llm_service import LLMService
+
+    def fail_if_initialized(self):
+        pytest.fail("LLMService was initialized before linked papers were available")
+
+    monkeypatch.setattr(LLMService, "__init__", fail_if_initialized)
+
+    if job_exists:
+        job = client.post("/research-jobs", json={"topic": "Solar forecasting"})
+        assert job.status_code == 201, job.text
+        job_id = job.json()["id"]
+    else:
+        job_id = uuid4()
+
+    response = client.post(f"/research-jobs/{job_id}/papers:generate-summary")
+
+    assert response.status_code == expected_status, response.text
+    assert response.json()["detail"] == expected_detail
