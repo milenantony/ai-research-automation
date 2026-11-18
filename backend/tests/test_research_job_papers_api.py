@@ -1,4 +1,6 @@
 from unittest.mock import AsyncMock
+import pytest
+from uuid import uuid4
 
 from app.services.paper_retrieval.arxiv import ArxivClient, ArxivPaper
 from app.services.paper_retrieval.semantic_scholar import SemanticScholarClient
@@ -7,6 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.research_paper import ResearchPaper
 from app.services.paper_service import PaperService
+from app.services.paper_retrieval.arxiv import ArxivAPIError, ArxivClient, ArxivPaper
+from app.services.paper_retrieval.semantic_scholar import (
+    SemanticScholarAPIError,
+    SemanticScholarClient,
+)
 
 
 def test_repeated_search_lists_one_paper_only_for_its_job(client, monkeypatch):
@@ -91,6 +98,97 @@ def test_search_rolls_back_new_paper_when_linking_fails(
         )
     )
     assert stored_id is None
+
+    listing = client.get(path)
+    assert listing.status_code == 200, listing.text
+    assert listing.json() == []
+@pytest.mark.parametrize("max_results", [0, 101])
+def test_search_rejects_invalid_limits(client, monkeypatch, max_results):
+    arxiv_search = AsyncMock(return_value=[])
+    scholar_search = AsyncMock(return_value=[])
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    job = client.post("/research-jobs", json={"topic": "Solar forecasting"})
+    assert job.status_code == 201, job.text
+
+    response = client.post(
+        f"/research-jobs/{job.json()['id']}/papers:search",
+        json={"max_results": max_results},
+    )
+
+    assert response.status_code == 422, response.text
+    assert any(
+        error["loc"] == ["body", "max_results"]
+        for error in response.json()["detail"]
+    )
+    arxiv_search.assert_not_awaited()
+    scholar_search.assert_not_awaited()
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_paper_endpoints_return_404_for_missing_job(client, monkeypatch, method):
+    arxiv_search = AsyncMock(return_value=[])
+    scholar_search = AsyncMock(return_value=[])
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    path = f"/research-jobs/{uuid4()}/papers"
+    if method == "GET":
+        response = client.get(path)
+    else:
+        response = client.post(f"{path}:search", json={"max_results": 1})
+
+    assert response.status_code == 404, response.text
+    arxiv_search.assert_not_awaited()
+    scholar_search.assert_not_awaited()
+def test_list_job_papers_paginates_in_id_order(client, monkeypatch):
+    papers = [
+        ArxivPaper(
+            external_id=f"pagination-{number}",
+            title=f"Solar forecasting study {number}",
+            abstract=None,
+            authors=[],
+            published_date=None,
+            paper_url=None,
+            pdf_url=None,
+            doi=None,
+        )
+        for number in range(3)
+    ]
+    monkeypatch.setattr(ArxivClient, "search", AsyncMock(return_value=papers))
+    monkeypatch.setattr(SemanticScholarClient, "search", AsyncMock(return_value=[]))
+
+    job = client.post("/research-jobs", json={"topic": "Solar forecasting"})
+    assert job.status_code == 201, job.text
+    path = f"/research-jobs/{job.json()['id']}/papers"
+
+    search = client.post(f"{path}:search", json={"max_results": 3})
+    assert search.status_code == 200, search.text
+    expected_ids = sorted(paper["id"] for paper in search.json())
+    assert len(set(expected_ids)) == 3
+
+    for skip in (0, 2, 3):
+        page = client.get(path, params={"skip": skip, "limit": 2})
+        assert page.status_code == 200, page.text
+        assert [paper["id"] for paper in page.json()] == expected_ids[skip : skip + 2]
+def test_search_returns_502_when_both_providers_fail(client, monkeypatch):
+    arxiv_search = AsyncMock(side_effect=ArxivAPIError("arXiv unavailable"))
+    scholar_search = AsyncMock(
+        side_effect=SemanticScholarAPIError("Semantic Scholar unavailable")
+    )
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    topic = "Solar forecasting"
+    job = client.post("/research-jobs", json={"topic": topic})
+    assert job.status_code == 201, job.text
+    path = f"/research-jobs/{job.json()['id']}/papers"
+
+    response = client.post(f"{path}:search", json={"max_results": 2})
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "All paper retrieval providers failed"
+    arxiv_search.assert_awaited_once_with(topic, max_results=2)
+    scholar_search.assert_awaited_once_with(topic, max_results=2)
 
     listing = client.get(path)
     assert listing.status_code == 200, listing.text
