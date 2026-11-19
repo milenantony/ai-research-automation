@@ -30,6 +30,9 @@ from app.services.paper_retrieval_service import (
 from app.services.paper_service import PaperService
 from app.services.summary_service import save_linked_paper_summary
 from app.services.paper_discovery_agent import PaperDiscoveryAgent
+from app.schemas.research import GapAnalysisRequest, GapAnalysisResponse
+from app.services.gap_analysis_service import generate_gap_analysis
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,6 @@ def create_research_job(
     request: ResearchJobCreate,
     db: Session = Depends(get_db),
 ) -> ResearchJob:
-
     job = ResearchJob(
         topic=request.topic,
         status=ResearchJobStatus.PENDING.value,
@@ -526,3 +528,54 @@ def generate_linked_paper_summary(
         ) from exc
 
     return response
+
+@router.post(
+    "/{job_id}/papers:analyze-gaps",
+    response_model=GapAnalysisResponse,
+)
+def analyze_research_gaps(
+    job_id: UUID,
+    request: GapAnalysisRequest,
+    db: Session = Depends(get_db),
+) -> GapAnalysisResponse:
+    job = get_research_job(job_id=job_id, db=db)
+
+    if len(request.paper_ids) != len(set(request.paper_ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Selected paper IDs must be unique",
+        )
+
+    try:
+        linked_papers = PaperService.papers_for_job(db, job_id).all()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to load papers for gap analysis: %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research papers",
+        ) from exc
+
+    papers_by_id = {paper.id: paper for paper in linked_papers}
+    if any(paper_id not in papers_by_id for paper_id in request.paper_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Every selected paper must be linked to this research job",
+        )
+
+    selected_papers = [papers_by_id[paper_id] for paper_id in request.paper_ids]
+
+    try:
+        return generate_gap_analysis(job.id, job.topic, selected_papers)
+    except LLMConfigurationError as exc:
+        logger.exception("Gap analysis configuration failed for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="LLM configuration error",
+        ) from exc
+    except LLMProviderError as exc:
+        logger.exception("Gap analysis generation failed for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate a valid gap analysis",
+        ) from exc

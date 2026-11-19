@@ -1,0 +1,191 @@
+import json
+from uuid import UUID
+
+from app.models.research_paper import ResearchPaper
+from app.services.llm_service import LLMService
+from app.services.paper_service import PaperService
+import pytest
+from uuid import uuid4
+
+from app.services.gap_analysis_service import parse_gap_analysis
+from app.services.llm_exceptions import LLMProviderError
+
+
+
+def test_gap_analysis_uses_selected_papers_in_order(
+    client, db_session, monkeypatch
+):
+    job = client.post(
+        "/research-jobs",
+        json={"topic": "Solar forecasting"},
+    )
+    assert job.status_code == 201
+    job_id = UUID(job.json()["id"])
+
+    papers = [
+        ResearchPaper(
+            source="arxiv",
+            external_id=f"gap-test-{number}",
+            title=title,
+            abstract=f"Abstract for {title}.",
+            authors=[],
+        )
+        for number, title in enumerate(("First", "Second", "Excluded"))
+    ]
+    db_session.add_all(papers)
+    db_session.flush()
+    PaperService.link_papers_to_job(db_session, job_id, papers)
+    db_session.commit()
+
+    prompts = []
+
+    def fake_generate(self, prompt):
+        prompts.append(prompt)
+        return json.dumps({
+            "gaps": [{
+                "category": "inferred_gap",
+                "description": "A cautious comparison of the two studies.",
+                "supporting_paper_ids": [
+                    str(papers[1].id),
+                    str(papers[0].id),
+                ],
+                "evidence": "The selected abstracts describe different approaches.",
+            }]
+        })
+
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    monkeypatch.setattr(LLMService, "generate", fake_generate)
+
+    response = client.post(
+        f"/research-jobs/{job_id}/papers:analyze-gaps",
+        json={"paper_ids": [str(papers[1].id), str(papers[0].id)]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["gaps"][0]["supporting_paper_ids"] == [
+        str(papers[1].id),
+        str(papers[0].id),
+    ]
+    assert prompts[0].index("Title: Second") < prompts[0].index("Title: First")
+    assert "Title: Excluded" not in prompts[0]
+def test_gap_analysis_rejects_unselected_citation():
+    selected_id = uuid4()
+    other_id = uuid4()
+
+    response = json.dumps({
+        "gaps": [{
+            "category": "inferred_gap",
+            "description": "A proposed gap.",
+            "supporting_paper_ids": [str(other_id)],
+            "evidence": "A claimed observation.",
+        }]
+    })
+
+    with pytest.raises(LLMProviderError, match="unselected paper"):
+        parse_gap_analysis(
+            raw_response=response,
+            job_id=uuid4(),
+            topic="Solar forecasting",
+            selected_paper_ids=[selected_id],
+        )
+
+
+def test_gap_analysis_rejects_invalid_json():
+    with pytest.raises(LLMProviderError, match="invalid JSON"):
+        parse_gap_analysis(
+            raw_response="This is not JSON",
+            job_id=uuid4(),
+            topic="Solar forecasting",
+            selected_paper_ids=[uuid4()],
+        )
+def test_gap_analysis_rejects_paper_from_another_job(
+    client, db_session, monkeypatch
+):
+    first = client.post(
+        "/research-jobs", json={"topic": "Solar forecasting"}
+    )
+    second = client.post(
+        "/research-jobs", json={"topic": "Wind forecasting"}
+    )
+    assert first.status_code == second.status_code == 201
+
+    paper = ResearchPaper(
+        source="arxiv",
+        external_id="gap-other-job",
+        title="Wind study",
+        abstract="Wind forecasting methods.",
+        authors=[],
+    )
+    db_session.add(paper)
+    db_session.flush()
+    PaperService.link_papers_to_job(
+        db_session, UUID(second.json()["id"]), [paper]
+    )
+    db_session.commit()
+
+    def fail_if_called(self):
+        pytest.fail("LLM must not run for a paper from another job")
+
+    monkeypatch.setattr(LLMService, "__init__", fail_if_called)
+
+    response = client.post(
+        f"/research-jobs/{first.json()['id']}/papers:analyze-gaps",
+        json={"paper_ids": [str(paper.id)]},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == (
+        "Every selected paper must be linked to this research job"
+    )
+def test_gap_analysis_cannot_cite_paper_without_abstract(
+    client, db_session, monkeypatch
+):
+    job = client.post(
+        "/research-jobs", json={"topic": "Solar forecasting"}
+    )
+    assert job.status_code == 201
+    job_id = UUID(job.json()["id"])
+
+    with_abstract = ResearchPaper(
+        source="arxiv",
+        external_id="gap-with-abstract",
+        title="Study with evidence",
+        abstract="The study reports a limited evaluation period.",
+        authors=[],
+    )
+    without_abstract = ResearchPaper(
+        source="arxiv",
+        external_id="gap-no-abstract",
+        title="Study without evidence",
+        abstract=None,
+        authors=[],
+    )
+    db_session.add_all([with_abstract, without_abstract])
+    db_session.flush()
+    PaperService.link_papers_to_job(
+        db_session, job_id, [with_abstract, without_abstract]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    monkeypatch.setattr(
+        LLMService,
+        "generate",
+        lambda self, prompt: json.dumps({
+            "gaps": [{
+                "category": "author_reported_limitation",
+                "description": "Limited evaluation period.",
+                "supporting_paper_ids": [str(without_abstract.id)],
+                "evidence": "A fabricated claim.",
+            }]
+        }),
+    )
+
+    response = client.post(
+        f"/research-jobs/{job_id}/papers:analyze-gaps",
+        json={"paper_ids": [
+            str(with_abstract.id), str(without_abstract.id)
+        ]},
+    )
+
+    assert response.status_code == 502, response.text

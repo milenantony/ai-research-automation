@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from uuid import UUID
-
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 class ResearchJobStatus(str, Enum):
@@ -39,6 +39,7 @@ class ResearchSummaryResponse(BaseModel):
     job_id: UUID
     topic: str
     summary: str
+
 class PaperSearchRequest(BaseModel):
     max_results: int = Field(
         default=10,
@@ -55,6 +56,27 @@ class LinkedPaperSummaryRequest(BaseModel):
         min_length=1,
         description="Linked paper IDs to summarize, in the requested order",
     )
+
+class GapAnalysisRequest(BaseModel):
+    paper_ids: list[UUID] = Field(
+        min_length=1,
+        description="Human-selected linked paper IDs, in evidence order",
+    )
+
+
+class ResearchGap(BaseModel):
+    category: Literal["author_reported_limitation", "inferred_gap"]
+    description: str
+    supporting_paper_ids: list[UUID] = Field(min_length=1)
+    evidence: str
+
+
+class GapAnalysisResponse(BaseModel):
+    job_id: UUID
+    topic: str
+    gaps: list[ResearchGap]
+
+
 class ResearchPaperResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
