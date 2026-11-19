@@ -360,3 +360,37 @@ def test_linked_summary_rolls_back_when_source_insert_fails(
 
     linked_papers = PaperService.papers_for_job(db_session, job_id).all()
     assert [item.id for item in linked_papers] == [paper_id]
+def test_refined_search_uses_agent_query_and_preserves_job_topic(client, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.api.routes import research
+
+    topic = "How can we forecast solar irradiance?"
+    refined_query = "solar irradiance forecasting"
+    build_query = AsyncMock(return_value=refined_query)
+    agent = Mock(build_search_query=build_query)
+    monkeypatch.setattr(research, "PaperDiscoveryAgent", Mock(return_value=agent))
+
+    arxiv_search = AsyncMock(return_value=[])
+    scholar_search = AsyncMock(return_value=[])
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    job = client.post("/research-jobs", json={"topic": topic})
+    assert job.status_code == 201, job.text
+    job_path = f"/research-jobs/{job.json()['id']}"
+
+    response = client.post(
+        f"{job_path}/papers:search",
+        json={"refine_query": True, "max_results": 3},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+    build_query.assert_awaited_once_with(topic)
+    arxiv_search.assert_awaited_once_with(refined_query, max_results=3)
+    scholar_search.assert_awaited_once_with(refined_query, max_results=3)
+
+    stored_job = client.get(job_path)
+    assert stored_job.status_code == 200, stored_job.text
+    assert stored_job.json()["topic"] == topic

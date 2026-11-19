@@ -46,6 +46,10 @@ class PaperSearchRequest(BaseModel):
         le=100,
         description="Maximum number of papers to retrieve from each provider",
     )
+    refine_query: bool = Field(
+        default=False,
+        description="Use the Paper Discovery Agent to refine the job topic before searching",
+    )
 
 class ResearchPaperResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

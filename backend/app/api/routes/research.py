@@ -28,6 +28,7 @@ from app.services.paper_retrieval_service import (
 )
 from app.services.paper_service import PaperService
 from app.services.summary_service import save_linked_paper_summary
+from app.services.paper_discovery_agent import PaperDiscoveryAgent
 
 logger = logging.getLogger(__name__)
 
@@ -412,12 +413,15 @@ async def search_research_job_papers(
     job = get_research_job(job_id=job_id, db=db)
 
     try:
+        search_query = job.topic
+        if request.refine_query:
+            search_query = await PaperDiscoveryAgent().build_search_query(job.topic)
+
         papers = await PaperRetrievalService().search_and_save(
             db=db,
-            topic=job.topic,
+            topic=search_query,
             max_results=request.max_results,
         )
-
         unique_papers = {paper.id: paper for paper in papers}
         PaperService.link_papers_to_job(db, job_id, unique_papers.values())
         response = [
@@ -426,6 +430,21 @@ async def search_research_job_papers(
         ]
         db.commit()
         return response
+    except LLMConfigurationError as exc:
+        db.rollback()
+        logger.exception("Paper discovery configuration failed for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Paper discovery agent configuration failed",
+        ) from exc
+
+    except LLMProviderError as exc:
+        db.rollback()
+        logger.exception("Paper discovery query generation failed for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate a paper search query",
+        ) from exc
 
     except PaperRetrievalError as exc:
         db.rollback()
