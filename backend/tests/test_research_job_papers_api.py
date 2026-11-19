@@ -193,8 +193,10 @@ def test_search_returns_502_when_both_providers_fail(client, monkeypatch):
     listing = client.get(path)
     assert listing.status_code == 200, listing.text
     assert listing.json() == []
-def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
+def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch,db_session):
     from app.services.llm_service import LLMService
+    from uuid import UUID
+    from app.models import ResearchSummary, research_summary_papers
 
     def make_paper(external_id, title, abstract):
         return ArxivPaper(
@@ -210,10 +212,13 @@ def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
 
     solar = make_paper("summary-solar", "Solar study", "Cloud cover affects irradiance.")
     wind = make_paper("summary-wind", "Wind study", "Turbine height affects output.")
+    solar_two = make_paper("summary-solar-2", "Satellite forecasting", None)
 
     monkeypatch.setattr(
-        ArxivClient, "search", AsyncMock(side_effect=[[solar], [wind]])
+        ArxivClient, "search", AsyncMock(side_effect=[[solar, solar_two], [wind]])
     )
+
+   
     monkeypatch.setattr(SemanticScholarClient, "search", AsyncMock(return_value=[]))
 
     prompts = []
@@ -224,6 +229,7 @@ def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
 
     monkeypatch.setattr(LLMService, "__init__", lambda self: None)
     monkeypatch.setattr(LLMService, "generate", capture_prompt)
+    solar_ids_by_title = {}
 
     job_ids = []
     for topic in ("Solar forecasting", "Wind forecasting"):
@@ -231,9 +237,13 @@ def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
         assert job.status_code == 201, job.text
         job_id = job.json()["id"]
         search = client.post(
-            f"/research-jobs/{job_id}/papers:search", json={"max_results": 1}
+            f"/research-jobs/{job_id}/papers:search", json={"max_results": 2}
         )
         assert search.status_code == 200, search.text
+        if topic == "Solar forecasting":
+            solar_ids_by_title = {
+                paper["title"]: UUID(paper["id"]) for paper in search.json()
+            }
         job_ids.append(job_id)
 
     response = client.post(f"/research-jobs/{job_ids[0]}/papers:generate-summary")
@@ -249,6 +259,30 @@ def test_summary_uses_only_papers_linked_to_requested_job(client, monkeypatch):
     assert solar.abstract in prompts[0]
     assert wind.title not in prompts[0]
     assert wind.abstract not in prompts[0]
+    assert set(solar_ids_by_title) == {solar.title, solar_two.title}
+    prompt_titles = [
+        line.split(": ", 1)[1]
+        for line in prompts[0].splitlines()
+        if line.startswith(("Paper 1: ", "Paper 2: "))
+    ]
+    assert sorted(prompt_titles) == sorted(solar_ids_by_title)
+
+    saved = db_session.scalars(
+        select(ResearchSummary).where(ResearchSummary.job_id == UUID(job_ids[0]))
+    ).one()
+    assert saved.summary == response.json()["summary"]
+
+    links = research_summary_papers.c
+    stored_sources = db_session.execute(
+        select(links.position, links.paper_id)
+        .where(links.summary_id == saved.id)
+        .order_by(links.position)
+    ).all()
+    assert stored_sources == [
+        (position, solar_ids_by_title[title])
+        for position, title in enumerate(prompt_titles, start=1)
+    ]
+
 @pytest.mark.parametrize(
     ("job_exists", "expected_status", "expected_detail"),
     [
@@ -277,4 +311,52 @@ def test_linked_summary_requires_job_and_papers(
     response = client.post(f"/research-jobs/{job_id}/papers:generate-summary")
 
     assert response.status_code == expected_status, response.text
-    assert response.json()["detail"] == expected_detail
+def test_linked_summary_rolls_back_when_source_insert_fails(
+    client, db_session, monkeypatch
+):
+    from uuid import UUID
+
+    from app.api.routes import research
+    from app.models import ResearchSummary
+    from app.services.llm_service import LLMService
+    from app.services.summary_service import save_linked_paper_summary
+
+    job = client.post("/research-jobs", json={"topic": "Solar forecasting"})
+    assert job.status_code == 201, job.text
+    job_id = UUID(job.json()["id"])
+
+    paper = ResearchPaper(
+        source="arxiv",
+        external_id="summary-rollback-001",
+        title="Solar forecasting study",
+        authors=[],
+    )
+    db_session.add(paper)
+    db_session.flush()
+    paper_id = paper.id
+    PaperService.link_papers_to_job(db_session, job_id, [paper])
+    db_session.commit()
+
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    monkeypatch.setattr(LLMService, "generate", lambda self, prompt: "Solar summary.")
+
+    def save_with_duplicate_source(db, job_id, summary, paper_ids):
+        assert paper_ids == [paper_id]
+        save_linked_paper_summary(db, job_id, summary, [paper_id, paper_id])
+
+    monkeypatch.setattr(
+        research, "save_linked_paper_summary", save_with_duplicate_source
+    )
+
+    response = client.post(f"/research-jobs/{job_id}/papers:generate-summary")
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "Failed to save linked-paper summary"
+
+    saved_ids = db_session.scalars(
+        select(ResearchSummary.id).where(ResearchSummary.job_id == job_id)
+    ).all()
+    assert saved_ids == []
+
+    linked_papers = PaperService.papers_for_job(db_session, job_id).all()
+    assert [item.id for item in linked_papers] == [paper_id]

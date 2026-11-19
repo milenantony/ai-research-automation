@@ -27,6 +27,7 @@ from app.services.paper_retrieval_service import (
     PaperRetrievalService,
 )
 from app.services.paper_service import PaperService
+from app.services.summary_service import save_linked_paper_summary
 
 logger = logging.getLogger(__name__)
 
@@ -470,4 +471,23 @@ def generate_linked_paper_summary(
             detail=str(exc),
         ) from exc
 
-    return _generate_summary(job, context)
+    paper_ids = [paper.id for paper in papers]
+    response = _generate_summary(job, context)
+
+    try:
+        save_linked_paper_summary(
+            db=db,
+            job_id=job_id,
+            summary=response.summary,
+            paper_ids=paper_ids,
+        )
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to save linked-paper summary for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save linked-paper summary",
+        ) from exc
+
+    return response
