@@ -50,7 +50,11 @@ class PaperSearchRequest(BaseModel):
         default=False,
         description="Use the Paper Discovery Agent to refine the job topic before searching",
     )
-
+class LinkedPaperSummaryRequest(BaseModel):
+    paper_ids: list[UUID] = Field(
+        min_length=1,
+        description="Linked paper IDs to summarize, in the requested order",
+    )
 class ResearchPaperResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

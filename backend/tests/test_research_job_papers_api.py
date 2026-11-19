@@ -448,3 +448,60 @@ def test_refined_search_provider_failure_stops_retrieval(client, monkeypatch):
     build_query.assert_awaited_once_with("solar forecasting")
     arxiv_search.assert_not_awaited()
     scholar_search.assert_not_awaited()
+def test_reviewed_summary_uses_selected_papers_in_order(client, db_session, monkeypatch):
+    from uuid import UUID
+
+    from app.models import ResearchSummary, research_summary_papers
+    from app.services.llm_service import LLMService
+
+    job = client.post("/research-jobs", json={"topic": "Solar forecasting"})
+    other_job = client.post("/research-jobs", json={"topic": "Wind forecasting"})
+    assert job.status_code == other_job.status_code == 201
+    job_id = UUID(job.json()["id"])
+    other_job_id = UUID(other_job.json()["id"])
+
+    papers = [
+        ResearchPaper(source="arxiv", external_id=f"review-{i}",
+                      title=title, abstract=f"Abstract {i}", authors=[])
+        for i, title in enumerate(("First", "Second", "Excluded", "Other job"))
+    ]
+    db_session.add_all(papers)
+    db_session.flush()
+    PaperService.link_papers_to_job(db_session, job_id, papers[:3])
+    PaperService.link_papers_to_job(db_session, other_job_id, papers[3:])
+    db_session.commit()
+
+    prompts = []
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    monkeypatch.setattr(
+        LLMService, "generate",
+        lambda self, prompt: prompts.append(prompt) or "Reviewed summary",
+    )
+
+    selected = [str(papers[1].id), str(papers[0].id)]
+    response = client.post(
+        f"/research-jobs/{job_id}/papers:generate-summary",
+        json={"paper_ids": selected},
+    )
+    assert response.status_code == 200, response.text
+    assert "Paper 1: Second" in prompts[0]
+    assert "Paper 2: First" in prompts[0]
+    assert "Excluded" not in prompts[0]
+    assert "Other job" not in prompts[0]
+
+    summary_id = db_session.scalars(
+        select(ResearchSummary.id).where(ResearchSummary.job_id == job_id)
+    ).one()
+    saved_ids = db_session.execute(
+        select(research_summary_papers.c.paper_id)
+        .where(research_summary_papers.c.summary_id == summary_id)
+        .order_by(research_summary_papers.c.position)
+    ).scalars().all()
+    assert saved_ids == [UUID(paper_id) for paper_id in selected]
+
+    rejected = client.post(
+        f"/research-jobs/{job_id}/papers:generate-summary",
+        json={"paper_ids": [str(papers[3].id)]},
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert len(prompts) == 1

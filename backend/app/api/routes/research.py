@@ -15,6 +15,7 @@ from app.schemas.research import (
     ResearchSummaryResponse,
     ResearchPaperResponse,
     PaperSearchRequest,
+    LinkedPaperSummaryRequest,
 )
 from app.services.llm_exceptions import (
     LLMConfigurationError,
@@ -468,10 +469,10 @@ async def search_research_job_papers(
 )
 def generate_linked_paper_summary(
     job_id: UUID,
+    request: LinkedPaperSummaryRequest | None = None,
     db: Session = Depends(get_db),
 ) -> ResearchSummaryResponse:
     job = get_research_job(job_id=job_id, db=db)
-
     try:
         papers = PaperService.papers_for_job(db, job_id).all()
     except SQLAlchemyError:
@@ -481,7 +482,22 @@ def generate_linked_paper_summary(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve research papers",
         )
+    if request is not None:
+        selected_ids = request.paper_ids
 
+        if len(selected_ids) != len(set(selected_ids)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected paper IDs must be unique",
+            )
+
+        papers_by_id = {paper.id: paper for paper in papers}
+        if any(paper_id not in papers_by_id for paper_id in selected_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Every selected paper must be linked to this research job",
+            )
+        papers = [papers_by_id[paper_id] for paper_id in selected_ids]
     try:
         context = ResearchWorkflow.build_paper_context(papers)
     except ValueError as exc:
