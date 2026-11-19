@@ -394,3 +394,57 @@ def test_refined_search_uses_agent_query_and_preserves_job_topic(client, monkeyp
     stored_job = client.get(job_path)
     assert stored_job.status_code == 200, stored_job.text
     assert stored_job.json()["topic"] == topic
+def test_refined_search_configuration_failure_stops_retrieval(client, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.api.routes import research
+    from app.services.llm_exceptions import LLMConfigurationError
+
+    agent = Mock(side_effect=LLMConfigurationError("GEMINI_API_KEY is missing"))
+    monkeypatch.setattr(research, "PaperDiscoveryAgent", agent)
+
+    arxiv_search = AsyncMock()
+    scholar_search = AsyncMock()
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    job = client.post("/research-jobs", json={"topic": "solar forecasting"})
+    assert job.status_code == 201, job.text
+
+    response = client.post(
+        f"/research-jobs/{job.json()['id']}/papers:search",
+        json={"refine_query": True},
+    )
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "Paper discovery agent configuration failed"
+    arxiv_search.assert_not_awaited()
+    scholar_search.assert_not_awaited()
+def test_refined_search_provider_failure_stops_retrieval(client, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.api.routes import research
+    from app.services.llm_exceptions import LLMProviderError
+
+    build_query = AsyncMock(side_effect=LLMProviderError("Gemini request failed"))
+    agent = Mock(build_search_query=build_query)
+    monkeypatch.setattr(research, "PaperDiscoveryAgent", Mock(return_value=agent))
+
+    arxiv_search = AsyncMock()
+    scholar_search = AsyncMock()
+    monkeypatch.setattr(ArxivClient, "search", arxiv_search)
+    monkeypatch.setattr(SemanticScholarClient, "search", scholar_search)
+
+    job = client.post("/research-jobs", json={"topic": "solar forecasting"})
+    assert job.status_code == 201, job.text
+
+    response = client.post(
+        f"/research-jobs/{job.json()['id']}/papers:search",
+        json={"refine_query": True},
+    )
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "Failed to generate a paper search query"
+    build_query.assert_awaited_once_with("solar forecasting")
+    arxiv_search.assert_not_awaited()
+    scholar_search.assert_not_awaited()
