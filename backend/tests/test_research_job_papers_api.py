@@ -498,6 +498,16 @@ def test_reviewed_summary_uses_selected_papers_in_order(client, db_session, monk
         .order_by(research_summary_papers.c.position)
     ).scalars().all()
     assert saved_ids == [UUID(paper_id) for paper_id in selected]
+    listing = client.get(f"/research-jobs/{job_id}/summaries")
+    assert listing.status_code == 200, listing.text
+    assert len(listing.json()) == 1
+    assert listing.json()[0]["id"] == str(summary_id)
+    assert listing.json()[0]["summary"] == "Reviewed summary"
+    assert listing.json()[0]["paper_ids"] == selected
+
+    other_listing = client.get(f"/research-jobs/{other_job.json()['id']}/summaries")
+    assert other_listing.status_code == 200, other_listing.text
+    assert other_listing.json() == []
 
     rejected = client.post(
         f"/research-jobs/{job_id}/papers:generate-summary",

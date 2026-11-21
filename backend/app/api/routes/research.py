@@ -6,6 +6,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from app.dependencies import get_db
 from app.models.research_job import ResearchJob
+from app.models.research_summary import ResearchSummary
+from app.models.research_summary_papers import research_summary_papers
+from app.schemas.research import SavedResearchSummaryResponse
 from app.schemas.research import (
     ResearchJobCreate,
     ResearchJobResponse,
@@ -39,6 +42,8 @@ from sqlalchemy import select
 from app.models.research_gap_analysis import ResearchGapAnalysis
 from app.schemas.research import SavedGapAnalysisResponse
 from app.schemas.research import GapReviewRequest
+from app.schemas.research import ReportRequest, ReportResponse
+from app.services.report_service import build_report
 
 
 logger = logging.getLogger(__name__)
@@ -535,6 +540,51 @@ def generate_linked_paper_summary(
         ) from exc
 
     return response
+@router.get(
+    "/{job_id}/summaries",
+    response_model=list[SavedResearchSummaryResponse],
+)
+def list_research_summaries(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[SavedResearchSummaryResponse]:
+    job = get_research_job(job_id=job_id, db=db)
+
+    try:
+        summaries = db.scalars(
+            select(ResearchSummary)
+            .where(ResearchSummary.job_id == job_id)
+            .order_by(
+                ResearchSummary.created_at.desc(),
+                ResearchSummary.id.desc(),
+            )
+        ).all()
+
+        result = []
+        for summary in summaries:
+            paper_ids = db.scalars(
+                select(research_summary_papers.c.paper_id)
+                .where(research_summary_papers.c.summary_id == summary.id)
+                .order_by(research_summary_papers.c.position)
+            ).all()
+            result.append(
+                SavedResearchSummaryResponse(
+                    id=summary.id,
+                    job_id=job_id,
+                    topic=job.topic,
+                    summary=summary.summary,
+                    paper_ids=paper_ids,
+                    created_at=summary.created_at,
+                )
+            )
+        return result
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to list summaries for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve research summaries",
+        ) from exc
 
 @router.post(
     "/{job_id}/papers:analyze-gaps",
@@ -686,4 +736,66 @@ def review_research_gap(
         selected_paper_ids=record.selected_paper_ids,
         gaps=record.gaps,
         created_at=record.created_at,
+    )
+@router.post(
+    "/{job_id}/reports:generate",
+    response_model=ReportResponse,
+)
+def generate_research_report(
+    job_id: UUID,
+    request: ReportRequest,
+    db: Session = Depends(get_db),
+) -> ReportResponse:
+    job = get_research_job(job_id=job_id, db=db)
+
+    try:
+        summary = db.scalar(
+            select(ResearchSummary).where(
+                ResearchSummary.id == request.summary_id,
+                ResearchSummary.job_id == job_id,
+            )
+        )
+        analysis = db.scalar(
+            select(ResearchGapAnalysis).where(
+                ResearchGapAnalysis.id == request.gap_analysis_id,
+                ResearchGapAnalysis.job_id == job_id,
+            )
+        )
+        if summary is None or analysis is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Saved summary or gap analysis not found for this job",
+            )
+
+        summary_paper_ids = db.scalars(
+            select(research_summary_papers.c.paper_id)
+            .where(research_summary_papers.c.summary_id == summary.id)
+            .order_by(research_summary_papers.c.position)
+        ).all()
+        papers = PaperService.papers_for_job(db, job_id).all()
+        report = build_report(
+            topic=job.topic,
+            summary=summary,
+            summary_paper_ids=summary_paper_ids,
+            analysis=analysis,
+            papers=papers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to load report inputs for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load report inputs",
+        ) from exc
+
+    return ReportResponse(
+        job_id=job_id,
+        summary_id=summary.id,
+        gap_analysis_id=analysis.id,
+        report=report,
     )

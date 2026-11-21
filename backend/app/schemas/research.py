@@ -39,6 +39,10 @@ class ResearchSummaryResponse(BaseModel):
     job_id: UUID
     topic: str
     summary: str
+class SavedResearchSummaryResponse(ResearchSummaryResponse):
+    id: UUID
+    paper_ids: list[UUID]
+    created_at: datetime
 
 class PaperSearchRequest(BaseModel):
     max_results: int = Field(
@@ -63,8 +67,6 @@ class GapAnalysisRequest(BaseModel):
         description="Human-selected linked paper IDs, in evidence order",
     )
 
-
-
 class ResearchGap(BaseModel):
     category: Literal["author_reported_limitation", "inferred_gap"]
     description: str
@@ -84,7 +86,15 @@ class SavedGapAnalysisResponse(GapAnalysisResponse):
 class GapReviewRequest(BaseModel):
     gap_index: int = Field(ge=0, description="Zero-based position in the saved gaps")
     review_status: Literal["approved", "rejected"]
+class ReportRequest(BaseModel):
+    summary_id: UUID
+    gap_analysis_id: UUID
 
+class ReportResponse(BaseModel):
+    job_id: UUID
+    summary_id: UUID
+    gap_analysis_id: UUID
+    report: str
 class ResearchPaperResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
