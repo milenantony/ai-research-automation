@@ -32,6 +32,13 @@ from app.services.summary_service import save_linked_paper_summary
 from app.services.paper_discovery_agent import PaperDiscoveryAgent
 from app.schemas.research import GapAnalysisRequest, GapAnalysisResponse
 from app.services.gap_analysis_service import generate_gap_analysis
+from app.services.gap_analysis_storage import save_gap_analysis
+
+from sqlalchemy import select
+
+from app.models.research_gap_analysis import ResearchGapAnalysis
+from app.schemas.research import SavedGapAnalysisResponse
+from app.schemas.research import GapReviewRequest
 
 
 logger = logging.getLogger(__name__)
@@ -566,7 +573,10 @@ def analyze_research_gaps(
     selected_papers = [papers_by_id[paper_id] for paper_id in request.paper_ids]
 
     try:
-        return generate_gap_analysis(job.id, job.topic, selected_papers)
+        response = generate_gap_analysis(job.id, job.topic, selected_papers)
+        save_gap_analysis(db, response, request.paper_ids)
+        db.commit()
+        return response
     except LLMConfigurationError as exc:
         logger.exception("Gap analysis configuration failed for job %s", job_id)
         raise HTTPException(
@@ -579,3 +589,101 @@ def analyze_research_gaps(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to generate a valid gap analysis",
         ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to save gap analysis for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save gap analysis",
+        ) from exc
+@router.get(
+    "/{job_id}/gap-analyses",
+    response_model=list[SavedGapAnalysisResponse],
+)
+def list_gap_analyses(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[SavedGapAnalysisResponse]:
+    get_research_job(job_id=job_id, db=db)
+
+    try:
+        records = db.scalars(
+            select(ResearchGapAnalysis)
+            .where(ResearchGapAnalysis.job_id == job_id)
+            .order_by(
+                ResearchGapAnalysis.created_at.desc(),
+                ResearchGapAnalysis.id.desc(),
+            )
+        ).all()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to load gap analyses for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve gap analyses",
+        ) from exc
+
+    return [
+        SavedGapAnalysisResponse(
+            id=record.id,
+            job_id=record.job_id,
+            topic=record.topic,
+            selected_paper_ids=record.selected_paper_ids,
+            gaps=record.gaps,
+            created_at=record.created_at,
+        )
+        for record in records
+    ]
+@router.patch(
+    "/{job_id}/gap-analyses/{analysis_id}/review",
+    response_model=SavedGapAnalysisResponse,
+)
+def review_research_gap(
+    job_id: UUID,
+    analysis_id: UUID,
+    request: GapReviewRequest,
+    db: Session = Depends(get_db),
+) -> SavedGapAnalysisResponse:
+    get_research_job(job_id=job_id, db=db)
+
+    try:
+        record = db.scalar(
+            select(ResearchGapAnalysis)
+            .where(
+                ResearchGapAnalysis.id == analysis_id,
+                ResearchGapAnalysis.job_id == job_id,
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gap analysis not found",
+            )
+        if request.gap_index >= len(record.gaps):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gap index is out of range",
+            )
+
+        gaps = [dict(gap) for gap in record.gaps]
+        gaps[request.gap_index]["review_status"] = request.review_status
+        record.gaps = gaps
+        db.commit()
+        db.refresh(record)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to review gap in analysis %s", analysis_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to review gap",
+        ) from exc
+
+    return SavedGapAnalysisResponse(
+        id=record.id,
+        job_id=record.job_id,
+        topic=record.topic,
+        selected_paper_ids=record.selected_paper_ids,
+        gaps=record.gaps,
+        created_at=record.created_at,
+    )

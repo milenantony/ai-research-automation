@@ -64,18 +64,26 @@ class GapAnalysisRequest(BaseModel):
     )
 
 
+
 class ResearchGap(BaseModel):
     category: Literal["author_reported_limitation", "inferred_gap"]
     description: str
     supporting_paper_ids: list[UUID] = Field(min_length=1)
     evidence: str
-
+    review_status: Literal["pending", "approved", "rejected"] = "pending"
 
 class GapAnalysisResponse(BaseModel):
     job_id: UUID
     topic: str
     gaps: list[ResearchGap]
 
+class SavedGapAnalysisResponse(GapAnalysisResponse):
+    id: UUID
+    selected_paper_ids: list[UUID]
+    created_at: datetime
+class GapReviewRequest(BaseModel):
+    gap_index: int = Field(ge=0, description="Zero-based position in the saved gaps")
+    review_status: Literal["approved", "rejected"]
 
 class ResearchPaperResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

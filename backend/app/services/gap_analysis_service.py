@@ -75,6 +75,14 @@ def parse_gap_analysis(
         )
     except (ValueError, TypeError, KeyError, ValidationError) as exc:
         raise LLMProviderError("Gap analysis returned invalid JSON") from exc
+    result = result.model_copy(
+        update={
+            "gaps": [
+                gap.model_copy(update={"review_status": "pending"})
+                for gap in result.gaps
+            ]
+        }
+    )
 
     allowed_ids = set(selected_paper_ids)
     if any(

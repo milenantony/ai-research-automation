@@ -1,5 +1,8 @@
 import json
 from uuid import UUID
+from sqlalchemy import select
+
+from app.models.research_gap_analysis import ResearchGapAnalysis
 
 from app.models.research_paper import ResearchPaper
 from app.services.llm_service import LLMService
@@ -9,6 +12,7 @@ from uuid import uuid4
 
 from app.services.gap_analysis_service import parse_gap_analysis
 from app.services.llm_exceptions import LLMProviderError
+
 
 
 
@@ -68,6 +72,40 @@ def test_gap_analysis_uses_selected_papers_in_order(
     ]
     assert prompts[0].index("Title: Second") < prompts[0].index("Title: First")
     assert "Title: Excluded" not in prompts[0]
+    db_session.expire_all()
+    saved = db_session.scalars(
+        select(ResearchGapAnalysis).where(
+            ResearchGapAnalysis.job_id == job_id
+        )
+    ).one()
+
+    assert saved.topic == "Solar forecasting"
+    assert saved.selected_paper_ids == [
+        str(papers[1].id),
+        str(papers[0].id),
+    ]
+    assert saved.gaps == response.json()["gaps"]
+    listed = client.get(f"/research-jobs/{job_id}/gap-analyses")
+
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["id"] == str(saved.id)
+    assert listed.json()[0]["selected_paper_ids"] == [
+        str(papers[1].id),
+        str(papers[0].id),
+    ]
+    assert listed.json()[0]["gaps"] == response.json()["gaps"]
+    review = client.patch(
+    f"/research-jobs/{job_id}/gap-analyses/{saved.id}/review",
+    json={"gap_index": 0, "review_status": "approved"},
+    )
+
+    assert review.status_code == 200, review.text
+    assert review.json()["gaps"][0]["review_status"] == "approved"
+
+    db_session.expire_all()
+    reloaded = db_session.get(ResearchGapAnalysis, saved.id)
+    assert reloaded.gaps[0]["review_status"] == "approved"
 def test_gap_analysis_rejects_unselected_citation():
     selected_id = uuid4()
     other_id = uuid4()
@@ -189,3 +227,21 @@ def test_gap_analysis_cannot_cite_paper_without_abstract(
     )
 
     assert response.status_code == 502, response.text
+def test_generated_gap_cannot_approve_itself():
+    paper_id = uuid4()
+    result = parse_gap_analysis(
+        raw_response=json.dumps({
+            "gaps": [{
+                "category": "inferred_gap",
+                "description": "A cautious proposed gap.",
+                "supporting_paper_ids": [str(paper_id)],
+                "evidence": "The supplied abstract supports this inference.",
+                "review_status": "approved",
+            }]
+        }),
+        job_id=uuid4(),
+        topic="Solar forecasting",
+        selected_paper_ids=[paper_id],
+    )
+
+    assert result.gaps[0].review_status == "pending"
