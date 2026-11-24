@@ -1,0 +1,53 @@
+name: Build pgvector for Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Download PostgreSQL 18.4 and pgvector 0.8.7
+        shell: pwsh
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          curl.exe --fail --show-error --silent --location --retry 3 --output postgres.zip https://get.enterprisedb.com/postgresql/postgresql-18.4-1-windows-x64-binaries.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath postgres.zip -DestinationPath postgres-edb
+          $pgConfig = @(Get-ChildItem postgres-edb -Filter pg_config.exe -File -Recurse)
+          if ($pgConfig.Count -ne 1) { throw 'Expected one pg_config.exe in the PostgreSQL archive.' }
+          $pgRoot = $pgConfig[0].Directory.Parent.FullName
+          if (!(Test-Path (Join-Path $pgRoot 'include/server/postgres.h'))) {
+            throw 'PostgreSQL server headers are missing.'
+          }
+          "PGROOT=$pgRoot" >> $env:GITHUB_ENV
+          git clone --depth 1 --branch v0.8.7 https://github.com/pgvector/pgvector.git pgvector-src
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile extension with MSVC x64
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cd /d "%RUNNER_TEMP%\pgvector-src" || exit /b 1
+          nmake /NOLOGO /F Makefile.win || exit /b 1
+
+      - name: Package the PostgreSQL runtime files
+        shell: pwsh
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          New-Item -ItemType Directory -Path pgvector-package/lib, pgvector-package/share/extension | Out-Null
+          Copy-Item pgvector-src/vector.dll pgvector-package/lib/
+          Copy-Item pgvector-src/vector.control pgvector-package/share/extension/
+          Copy-Item pgvector-src/sql/vector--*.sql pgvector-package/share/extension/
+          Copy-Item pgvector-src/LICENSE pgvector-package/
+
+      - name: Upload pgvector ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgvector-0.8.7-postgresql-18.4-windows-x64
+          path: ${{ runner.temp }}/pgvector-package
+          if-no-files-found: error
