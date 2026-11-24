@@ -28,10 +28,20 @@ jobs:
           git clone --depth 1 --branch v0.8.7 https://github.com/pgvector/pgvector.git pgvector-src
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Locate Visual Studio C++ tools
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$installation) { throw 'MSVC x64 build tools were not found.' }
+          $setup = Join-Path $installation 'VC/Auxiliary/Build/vcvars64.bat'
+          if (!(Test-Path -LiteralPath $setup)) { throw "Compiler environment script not found: $setup" }
+          "PGVECTOR_VCVARS=$setup" >> $env:GITHUB_ENV
+
       - name: Compile extension with MSVC x64
         shell: cmd
         run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          call "%PGVECTOR_VCVARS%" || exit /b 1
           cd /d "%RUNNER_TEMP%\pgvector-src" || exit /b 1
           nmake /NOLOGO /F Makefile.win || exit /b 1
 
