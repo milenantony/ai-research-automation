@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.routes.insights import router as insights_router
 from app.api.routes.research import router as research_router
 
 app = FastAPI(
@@ -10,6 +11,7 @@ app = FastAPI(
 
 
 app.include_router(research_router)
+app.include_router(insights_router)
 
 
 @app.get("/")

@@ -1,4 +1,6 @@
+import json
 import os
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -29,7 +31,9 @@ class DeterministicEmbedder:
         return [*first, *([0.0] * (EMBEDDING_DIMENSIONS - 2))]
 
 
-def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(db_session):
+def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
+    db_session, client, monkeypatch
+):
     first_job = ResearchJob(topic="Solar forecasts")
     second_job = ResearchJob(topic="Storage")
     solar = ResearchPaper(
@@ -91,6 +95,30 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(db_session)
     assert db_session.scalar(text("""
         SELECT count(*) FROM research_abstract_passages WHERE job_id = :job_id
     """), {"job_id": first_job.id}) == 2
+
+    from app.api.routes import insights
+
+    monkeypatch.setattr(insights, "GeminiEmbeddingProvider", lambda: embedder)
+    llm = Mock()
+    llm.generate.return_value = json.dumps({"insights": [{
+        "category": "finding",
+        "claim": "The study forecasts solar generation from satellite imagery.",
+        "paper_id": str(solar.id),
+        "evidence_quote": "solar forecasts from satellite imagery",
+    }]})
+    monkeypatch.setattr(insights, "LLMService", lambda: llm)
+
+    response = client.post(
+        f"/research-jobs/{first_job.id}/papers:extract-insights",
+        json={"paper_ids": [str(solar.id)], "limit": 1},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["retrieved_paper_ids"] == [str(solar.id)]
+    assert payload["insights"][0]["paper_id"] == str(solar.id)
+    assert payload["insights"][0]["evidence_quote"] == "solar forecasts from satellite imagery"
+    assert payload["insights"][0]["paper_url"] == solar.paper_url
+    assert "battery storage" not in llm.generate.call_args.args[0]
 
     solar.abstract = "updated solar forecasts"
     db_session.flush()
