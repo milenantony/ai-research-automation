@@ -1,16 +1,21 @@
 import pytest
 from pathlib import Path
 
-from dotenv import load_dotenv
+from alembic import command
+from alembic.config import Config
+from dotenv import dotenv_values, load_dotenv
 
 # Load test configuration before importing the application.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BACKEND_DIR / ".env.test", override=True)
+TEST_ENV = BACKEND_DIR / ".env.test"
+if not dotenv_values(TEST_ENV).get("DATABASE_URL"):
+    raise RuntimeError("Set DATABASE_URL in backend/.env.test before running tests.")
+load_dotenv(TEST_ENV, override=True)
 
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from app.database import Base, engine
+from app.database import engine
 from app.dependencies import get_db
 from app.main import app
 from app.models import ResearchJob
@@ -18,9 +23,10 @@ from app.models import ResearchJob
 
 @pytest.fixture(scope="session", autouse=True)
 def prepare_test_database():
-    """Create the required tables in the test database."""
-    Base.metadata.create_all(bind=engine)
-    yield
+    """Apply Alembic migrations to the test database."""
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    command.upgrade(config, "head")
 
 
 @pytest.fixture()

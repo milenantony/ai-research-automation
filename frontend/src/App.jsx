@@ -1,8 +1,82 @@
 import { useEffect, useState } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import './App.css'
+
+const markdownComponents = {
+  h1: ({ children }) => <h2>{children}</h2>,
+  table: ({ children }) => (
+    <div className="markdown-table">
+      <table>{children}</table>
+    </div>
+  ),
+}
+
+function ResearchMarkdown({ children }) {
+  return (
+    <div className="report-body">
+      <Markdown components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml>
+        {children}
+      </Markdown>
+    </div>
+  )
+}
+
+async function fetchJobData(jobId, resource, errorMessage, signal) {
+  const response = await fetch(`/research-jobs/${jobId}/${resource}`, { signal })
+  if (!response.ok) throw new Error(errorMessage)
+  return response.json()
+}
+
+const itemsPerPage = 8
+
+async function fetchAllPages(path, errorMessage, signal) {
+  const items = []
+  const limit = 100
+
+  for (let skip = 0; ; skip += limit) {
+    const response = await fetch(`${path}?skip=${skip}&limit=${limit}`, { signal })
+    if (!response.ok) throw new Error(errorMessage)
+    const page = await response.json()
+    items.push(...page)
+    if (page.length < limit) return items
+  }
+}
+
+function ListPagination({ page, count, onChange, label }) {
+  const last = Math.ceil(count / itemsPerPage)
+  if (last <= 1) return null
+
+  return (
+    <nav className="list-pagination" aria-label={label}>
+      <button type="button" disabled={page <= 1} onClick={() => onChange(page - 1)}>Previous</button>
+      <span aria-live="polite">Page {page} of {last}</span>
+      <button type="button" disabled={page >= last} onClick={() => onChange(page + 1)}>Next</button>
+    </nav>
+  )
+}
+
+function pageItems(items, page) {
+  const start = (page - 1) * itemsPerPage
+  return items.slice(start, start + itemsPerPage)
+}
+
+const jobStatusLabels = {
+  PENDING: 'Pending',
+  RUNNING: 'In progress',
+  PARTIALLY_COMPLETED: 'Partially completed',
+  COMPLETED: 'Completed',
+  FAILED: 'Failed',
+}
 
 function App() {
   const [jobs, setJobs] = useState([])
+  const [jobFilter, setJobFilter] = useState('')
+  const [jobPage, setJobPage] = useState(1)
+  const [paperPage, setPaperPage] = useState(1)
+  const visibleJobs = jobs.filter((job) =>
+    job.topic.toLowerCase().includes(jobFilter.trim().toLowerCase()),
+  )
   const [topic, setTopic] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -12,18 +86,66 @@ function App() {
   const [summarizingJob, setSummarizingJob] = useState(null)
   const [summaryByJob, setSummaryByJob] = useState({})
   const [searchingJob, setSearchingJob] = useState(null)
+  const [emptySearchByJob, setEmptySearchByJob] = useState({})
   const [analyzingJob, setAnalyzingJob] = useState(null)
   const [analysisByJob, setAnalysisByJob] = useState({})
   const [reportByJob, setReportByJob] = useState({})
   const [generatingReportJob, setGeneratingReportJob] = useState(null)
-  const [page, setPage] = useState('home')
+  const [route, setRoute] = useState(() => window.location.hash)
+  const [savedJobLoad, setSavedJobLoad] = useState(null)
+  const [savedJobRetry, setSavedJobRetry] = useState(0)
+  const activeJobId = route.startsWith('#/workspace/jobs/')
+    ? route.slice('#/workspace/jobs/'.length)
+    : null
+  const activeJob = jobs.find((job) => String(job.id) === activeJobId)
+  const savedJobId = activeJob?.id
+  const loadingSavedJob = savedJobLoad?.jobId !== savedJobId
+  const savedJobError = savedJobLoad?.jobId === savedJobId ? savedJobLoad?.error : null
+
+  useEffect(() => {
+    if (!savedJobId) return
+
+    const controller = new AbortController()
+    const { signal } = controller
+
+    Promise.all([
+      fetchAllPages('/research-jobs/' + savedJobId + '/papers', 'Could not load saved papers.', signal),
+      fetchJobData(savedJobId, 'summaries', 'Could not load saved summaries.', signal),
+      fetchJobData(savedJobId, 'gap-analyses', 'Could not load saved gap analyses.', signal),
+      fetchJobData(savedJobId, 'reports/latest', 'Could not load the saved report.', signal),
+    ]).then(([papers, summaries, analyses, savedReport]) => {
+      if (signal.aborted) return
+      setPapersByJob((previous) => ({ ...previous, [savedJobId]: papers }))
+      setSummaryByJob((previous) => ({ ...previous, [savedJobId]: summaries[0] ?? null }))
+      setAnalysisByJob((previous) => ({ ...previous, [savedJobId]: analyses[0] ?? null }))
+      setReportByJob((previous) => ({ ...previous, [savedJobId]: savedReport.report }))
+      setSavedJobLoad({ jobId: savedJobId })
+    }).catch((error) => {
+      if (!signal.aborted) {
+        setSavedJobLoad({ jobId: savedJobId, error: error.message })
+      }
+    })
+
+    return () => controller.abort()
+  }, [savedJobId, savedJobRetry])
+
+  useEffect(() => {
+    function handleRouteChange() {
+      const hash = window.location.hash
+      setRoute(hash)
+      setPaperPage(1)
+      setSavedJobLoad(null)
+      if (!hash || hash === '#' || hash.startsWith('#/workspace')) window.scrollTo(0, 0)
+    }
+
+    window.addEventListener('hashchange', handleRouteChange)
+    return () => window.removeEventListener('hashchange', handleRouteChange)
+  }, [])
 
 
   async function loadJobs() {
     try {
-      const response = await fetch('/research-jobs?limit=100')
-      if (!response.ok) throw new Error('Could not load research jobs.')
-      setJobs(await response.json())
+      setJobs(await fetchAllPages('/research-jobs', 'Could not load research jobs.'))
       setError('')
     } catch (err) {
       setError(err.message)
@@ -35,11 +157,7 @@ function App() {
 useEffect(() => {
   const controller = new AbortController()
 
-  fetch('/research-jobs?limit=100', { signal: controller.signal })
-    .then((response) => {
-      if (!response.ok) throw new Error('Could not load research jobs.')
-      return response.json()
-    })
+  fetchAllPages('/research-jobs', 'Could not load research jobs.', controller.signal)
     .then((data) => {
       setJobs(data)
       setError('')
@@ -71,6 +189,7 @@ useEffect(() => {
       if (!response.ok) throw new Error('Could not create the research job.')
 
       setTopic('')
+      setJobPage(1)
       await loadJobs()
     } catch (err) {
       setError(err.message)
@@ -79,24 +198,26 @@ useEffect(() => {
     }
   }
   async function loadLatestSummary(jobId) {
-    const response = await fetch(`/research-jobs/${jobId}/summaries`)
-    if (!response.ok) throw new Error('Could not load saved summaries.')
-
-    const summaries = await response.json()
-    setSummaryByJob((previous) => ({
-      ...previous,
-    [jobId]: summaries[0] || null,    }))
+    const summaries = await fetchJobData(jobId, 'summaries', 'Could not load saved summaries.')
+    setSummaryByJob((previous) => ({ ...previous, [jobId]: summaries[0] ?? null }))
   }
+
   async function loadLatestAnalysis(jobId) {
-    const response = await fetch(`/research-jobs/${jobId}/gap-analyses`)
-    if (!response.ok) throw new Error('Could not load saved gap analyses.')
-
-    const analyses = await response.json()
-    setAnalysisByJob((previous) => ({
-      ...previous,
-      [jobId]: analyses[0] || null,
-    }))
+    const analyses = await fetchJobData(jobId, 'gap-analyses', 'Could not load saved gap analyses.')
+    setAnalysisByJob((previous) => ({ ...previous, [jobId]: analyses[0] ?? null }))
   }
+
+  function jobStatusLabel(job) {
+    const status = searchingJob === job.id && job.status === 'PENDING' ? 'RUNNING' : job.status
+    return jobStatusLabels[status] ?? status
+  }
+
+  function setJobStatus(jobId, status) {
+    setJobs((previous) => previous.map((job) =>
+      job.id === jobId ? { ...job, status } : job
+    ))
+  }
+
   async function generateReport(jobId) {
     const summary = summaryByJob[jobId]
     const analysis = analysisByJob[jobId]
@@ -124,6 +245,7 @@ useEffect(() => {
         ...previous,
         [jobId]: result.report,
       }))
+      setJobStatus(jobId, 'COMPLETED')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -227,24 +349,10 @@ useEffect(() => {
           }
       })
   }
-  async function loadPapers(jobId) {
-    setError('')
-
-    try {
-      const response = await fetch(`/research-jobs/${jobId}/papers?limit=100`)
-      if (!response.ok) throw new Error('Could not load saved papers.')
-
-      const papers = await response.json()
-      setPapersByJob((previous) => ({ ...previous, [jobId]: papers }))
-      await loadLatestSummary(jobId)
-      await loadLatestAnalysis(jobId)
-    } catch (err) {
-      setError(err.message)
-    }
-  }
   async function searchPapers(jobId) {
   setSearchingJob(jobId)
   setError('')
+  setEmptySearchByJob((previous) => ({ ...previous, [jobId]: false }))
 
   try {
     const response = await fetch(`/research-jobs/${jobId}/papers:search`, {
@@ -253,15 +361,20 @@ useEffect(() => {
       body: JSON.stringify({ max_results: 5, refine_query: false }),
     })
 
+    const jobResponse = await fetch('/research-jobs/' + jobId).catch(() => null)
+    if (jobResponse?.ok) {
+      const updatedJob = await jobResponse.json()
+      setJobStatus(jobId, updatedJob.status)
+    }
+
     if (!response.ok) {
       const result = await response.json().catch(() => ({}))
       throw new Error(result.detail || 'Paper search failed.')
     }
 
-    const papersResponse = await fetch(`/research-jobs/${jobId}/papers?limit=100`)
-    if (!papersResponse.ok) throw new Error('Could not load the saved papers.')
-
-    const papers = await papersResponse.json()
+    const results = await response.json()
+    const papers = await fetchAllPages('/research-jobs/' + jobId + '/papers', 'Could not load the saved papers.')
+    setEmptySearchByJob((previous) => ({ ...previous, [jobId]: results.length === 0 }))
     setPapersByJob((previous) => ({ ...previous, [jobId]: papers }))
   } catch (err) {
     setError(err.message)
@@ -270,63 +383,107 @@ useEffect(() => {
   }
 }
 
-if (page === 'home') {
+if (!route.startsWith('#/workspace')) {
   return (
-    <main className="home">
+    <main className="home" id="home">
       <header className="home-nav">
-        <span className="brand">PaperX</span>
-        <button type="button" onClick={() => setPage('workspace')}>
-          Open workspace
-        </button>
+        <span className="brand"><span className="brand-mark" aria-hidden="true">X</span>PaperX</span>
+        <nav aria-label="Homepage">
+          <a href="#workflow">How it works</a>
+          <a href="#features">Features</a>
+        </nav>
+        <a className="home-action home-action-secondary" href="#/workspace">Open workspace</a>
       </header>
 
       <section className="home-hero">
         <div>
-          <p className="eyebrow">AI RESEARCH WORKSPACE</p>
+          <p className="eyebrow">AI research workspace</p>
           <h1>From research question to clearer insight.</h1>
-          <p>
-            Discover academic papers, summarize selected evidence, explore
-            research gaps, and create a reviewed report in one workspace.
-          </p>
-          <button type="button" onClick={() => setPage('workspace')}>
-            Start researching
-          </button>
-        </div>
-
-        <div className="home-visual" aria-hidden="true">
-          <div className="visual-paper visual-paper-back" />
-          <div className="visual-paper visual-paper-front">
-            <span className="visual-line visual-line-short" />
-            <span className="visual-line" />
-            <span className="visual-line" />
-            <span className="visual-line visual-line-medium" />
-            <span className="visual-mark">✦</span>
+          <p>Find academic papers, summarize selected evidence, review potential gaps, and export a cited report.</p>
+          <div className="home-hero-actions">
+            <a className="home-action" href="#/workspace">Start researching <span aria-hidden="true">↗</span></a>
+            <a href="#workflow">See how it works</a>
           </div>
         </div>
+        <img className="home-image" src={import.meta.env.BASE_URL + 'paperx-research-desk.webp'}
+          alt="Research papers with charts and a silver pen on a light desk" width="1200" height="900" fetchPriority="high" />
       </section>
 
-      <section className="home-steps">
-        <h2>How it works</h2>
-        <div className="step-grid">
-          <article><span>01</span><h3>Discover</h3><p>Find papers related to your topic.</p></article>
-          <article><span>02</span><h3>Examine</h3><p>Select papers and review summaries and potential gaps.</p></article>
-          <article><span>03</span><h3>Report</h3><p>Approve supported gaps and create a cited report.</p></article>
+      <section className="home-steps" id="workflow">
+        <div className="home-section-inner">
+          <h2>How it works</h2>
+          <ol className="step-grid">
+            <li><h3>Create a research job</h3><p>Enter a focused question or topic in your workspace.</p></li>
+            <li id="discover-papers"><h3>Discover and select papers</h3><p>Search for related papers, read their abstracts, and choose the sources to include.</p></li>
+            <li id="review-gaps"><h3>Summarize and review</h3><p>Generate a summary, examine evidence for potential gaps, and record your review.</p></li>
+            <li id="export-report"><h3>Export your report</h3><p>Generate a cited report from reviewed evidence and use Save as PDF to keep a copy.</p></li>
+          </ol>
         </div>
       </section>
+
+      <section className="home-features" id="features">
+        <img className="home-image" src={import.meta.env.BASE_URL + 'paperx-research-notes.webp'}
+          alt="Open research notebook beside a stack of academic papers" width="1200" height="900" loading="lazy" />
+        <div>
+          <h2>Built for literature review</h2>
+          <dl className="home-feature-list">
+            <div><dt>Searchable research library</dt><dd>Filter saved topics and reopen a dedicated workspace for each job.</dd></div>
+            <div><dt>Evidence you can review</dt><dd>Read abstracts, select sources, and approve or reject proposed research gaps.</dd></div>
+            <div><dt>Reports ready to print</dt><dd>Export formatted reports with tables, references, and a scope statement.</dd></div>
+          </dl>
+          <details className="home-faq">
+            <summary>What do AI summaries use?</summary>
+            <p>PaperX summarizes the abstracts of the papers you select. Use the original papers to verify findings before citing them.</p>
+          </details>
+        </div>
+      </section>
+
+      <footer className="home-footer">
+        <div className="home-section-inner">
+          <div className="home-footer-grid">
+            <div>
+              <a className="brand" href="#home"><span className="brand-mark" aria-hidden="true">X</span>PaperX</a>
+              <p>A workspace for academic paper discovery, evidence review, and cited reports.</p>
+            </div>
+            <nav aria-labelledby="footer-explore">
+              <h2 id="footer-explore">Explore PaperX</h2>
+              <ul>
+                <li><a href="#/workspace">Research workspace</a></li>
+                <li><a href="#workflow">How it works</a></li>
+                <li><a href="#features">Features and FAQ</a></li>
+              </ul>
+            </nav>
+            <nav aria-labelledby="footer-guide">
+              <h2 id="footer-guide">Research guide</h2>
+              <ul>
+                <li><a href="#discover-papers">Find and select papers</a></li>
+                <li><a href="#review-gaps">Review research gaps</a></li>
+                <li><a href="#export-report">Export a report</a></li>
+              </ul>
+            </nav>
+            <div>
+              <h2>Saving as PDF</h2>
+              <p>In a generated report, select <strong>Save report as PDF</strong>, then choose <strong>Save as PDF</strong> in your browser’s print dialog.</p>
+            </div>
+          </div>
+          <div className="home-footer-bottom">
+            <p>Reports use selected paper abstracts. Check the original sources before citing findings.</p>
+            <a href="#home">Back to top <span aria-hidden="true">↑</span></a>
+          </div>
+        </div>
+      </footer>
     </main>
   )
 }
   return (
     <main className="app">
       <header className="header">
-        <span className="brand">PaperX</span>
-        <button type="button" onClick={() => setPage('home')}>
-          Home
-        </button>
+        <span className="brand"><span className="brand-mark" aria-hidden="true">X</span>PaperX</span>
+        <a className="workspace-home-link" href="#">Home</a>
         <span className="header-label">AI Research Workspace</span>
       </header>
 
-      <section className="intro">
+      {!activeJobId && <><section className="intro">
         <p className="eyebrow">YOUR RESEARCH, ORGANIZED</p>
         <h1>Start with a question.</h1>
         <p>Create a research job to begin discovering papers and building your report.</p>
@@ -350,39 +507,87 @@ if (page === 'home') {
             </button>
           </div>
         </form>
-      </section>
+      </section></>}
 
       <section className="jobs-section">
-        <div className="section-heading">
-          <h2>Research jobs</h2>
-          <span>{jobs.length} shown</span>
-        </div>
+        {activeJobId ? (
+          <a className="library-back" href="#/workspace"><span aria-hidden="true">←</span> Research library</a>
+        ) : (
+          <div className="section-heading">
+            <h2>Research jobs</h2>
+            <span>{jobs.length} saved</span>
+          </div>
+        )}
 
         {error && <p role="alert" className="error">{error}</p>}
         {loading ? (
           <p>Loading research jobs…</p>
+        ) : activeJobId && !activeJob ? (
+          !error && <p className="empty">This research job could not be found.</p>
         ) : jobs.length === 0 ? (
           <p className="empty">No research jobs yet. Create your first one above.</p>
         ) : (
-          <ul className="job-list">
-            {jobs.map((job) => (
+          <div className="workspace-layout workspace-page">
+            {!activeJobId && <nav className="workspace-sidebar" aria-label="Research jobs">
+              <div className="library-filter">
+                <label htmlFor="job-filter">Find a research job</label>
+                <input
+                  id="job-filter"
+                  type="search"
+                  value={jobFilter}
+                  onChange={(event) => {
+                    setJobFilter(event.target.value)
+                    setJobPage(1)
+                  }}
+                  placeholder="Filter by topic"
+                />
+              </div>
+              <ul className="library-list">
+                {pageItems(visibleJobs, jobPage).map((job) => (
+                  <li key={job.id}>
+                    <a href={`#/workspace/jobs/${job.id}`} title={job.topic}>
+                      <span className="library-entry-status">{jobStatusLabel(job)}</span>
+                      <span className="library-entry-title">{job.topic}</span>
+                      <span className="library-entry-arrow" aria-hidden="true">↗</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              <ListPagination page={jobPage} count={visibleJobs.length} onChange={setJobPage} label="Research jobs pages" />
+              {visibleJobs.length === 0 && <p className="library-empty" role="status">No matching jobs.</p>}
+            </nav>}
+            {activeJob && <ul className="job-list">
+              {[activeJob].map((job) => (
               <li className="job" key={job.id}>
-                <div>
+                <header className="job-masthead">
+                  <span className="status">{jobStatusLabel(job)}</span>
                   <h3>{job.topic}</h3>
-                  <small>{job.id}</small>
+                </header>
+                <div className="job-actions">
+                  <button
+                    type="button"
+                    disabled={loadingSavedJob || searchingJob === job.id}
+                    onClick={() => searchPapers(job.id)}
+                  >
+                    {searchingJob === job.id ? 'Searching…' : 'Find papers'}
+                  </button>
                 </div>
-                <span className="status">{job.status}</span>
-                <button type="button" onClick={() => loadPapers(job.id)}>
-                  View saved papers
-                </button>
-                <button
-                  type="button"
-                  disabled={searchingJob === job.id}
-                  onClick={() => searchPapers(job.id)}
-                >
-                  {searchingJob === job.id ? 'Searching…' : 'Find papers'}
-                </button>
-                {papersByJob[job.id] && (
+                <div role="status">
+                  {emptySearchByJob[job.id] && 'This search returned no papers. Try a more specific research topic.'}
+                </div>
+                {loadingSavedJob && <p className="job-load-status" role="status">Loading saved research…</p>}
+                {savedJobError && (
+                  <div className="job-load-status">
+                    <p role="alert">{savedJobError}</p>
+                    <button type="button" onClick={() => {
+                      setSavedJobLoad(null)
+                      setSavedJobRetry((attempt) => attempt + 1)
+                    }}>
+                      Retry loading saved research
+                    </button>
+                  </div>
+                )}
+                {!loadingSavedJob && papersByJob[job.id] && (
                   <div className="papers">
                     <h4>Saved papers ({papersByJob[job.id].length})</h4>
                     <button
@@ -412,15 +617,15 @@ if (page === 'home') {
                           <p>No gaps identified.</p>
                         ) : (
                           analysisByJob[job.id].gaps.map((gap, index) => (
-                            <div key={index}>
+                            <div className="gap-review" key={index}>
                               <strong>{gap.category.replaceAll('_', ' ')}</strong>
                               <p>{gap.description}</p>
-                              <p><small>Evidence: {gap.evidence}</small></p>
-                              <p>Status: {gap.review_status}</p>
+                              <p className="gap-evidence"><strong>Evidence</strong> {gap.evidence}</p>
+                              <p className="gap-review-status">Status: {gap.review_status}</p>
                               <button type="button" onClick={() => reviewGap(job.id, index, 'approved')}>
                                 Approve
                               </button>
-                              <button type="button" onClick={() => reviewGap(job.id, index, 'rejected')}>
+                              <button className="gap-reject" type="button" onClick={() => reviewGap(job.id, index, 'rejected')}>
                                 Reject
                               </button>
                             </div>
@@ -431,11 +636,11 @@ if (page === 'home') {
                     {summaryByJob[job.id] && (
                       <section className="summary">
                         <h4>Research summary</h4>
-                        <pre>{summaryByJob[job.id].summary}</pre>
+                        <ResearchMarkdown>{summaryByJob[job.id].summary}</ResearchMarkdown>
                       </section>
                     )}
                     {summaryByJob[job.id] && analysisByJob[job.id] && (
-                      <button
+                      <button className="report-generate"
                         type="button"
                         disabled={
                           generatingReportJob === job.id ||
@@ -454,14 +659,17 @@ if (page === 'home') {
                         <button type="button" onClick={() => window.print()}>
                           Save report as PDF
                         </button>
-                        <pre>{reportByJob[job.id]}</pre>
+                        <ResearchMarkdown>
+                          {reportByJob[job.id].replace(/\r?\n(?=\[\d+\] )/g, '\n\n')}
+                        </ResearchMarkdown>
                       </section>
                     )}
                     {papersByJob[job.id].length === 0 ? (
-                      <p>No papers found for this topic.</p>
+                      !emptySearchByJob[job.id] && searchingJob !== job.id && <p>No papers saved yet.</p>
                     ) : (
+                      <>
                       <ul>
-                        {papersByJob[job.id].map((paper) => (
+                        {pageItems(papersByJob[job.id], Math.min(paperPage, Math.ceil(papersByJob[job.id].length / itemsPerPage))).map((paper) => (
                           <li key={paper.id}>
                             <label className="paper-choice">
                               <input
@@ -476,16 +684,20 @@ if (page === 'home') {
                                 View paper
                               </a>
                             )}
-                            {paper.abstract && <p>{paper.abstract}</p>}
+                            {paper.abstract && <details className="paper-abstract"><summary>Read abstract</summary><p>{paper.abstract}</p></details>}
                           </li>
                         ))}
                       </ul>
+                      <ListPagination page={Math.min(paperPage, Math.ceil(papersByJob[job.id].length / itemsPerPage))} count={papersByJob[job.id].length} onChange={setPaperPage} label="Saved papers pages" />
+                      </>
                     )}
                   </div>
                 )}
               </li>
             ))}
-          </ul>
+          </ul>}
+        </div>
+
         )}
       </section>
     </main>

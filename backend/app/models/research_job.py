@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, String ,Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,3 +33,4 @@ class ResearchJob(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)

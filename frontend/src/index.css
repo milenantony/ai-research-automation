@@ -1,3 +1,22 @@
+:root {
+  --paperx-ink: #14213d;
+  --paperx-action: #4a4e69;
+  --paperx-steel: #8e9aaf;
+  --paperx-muted: #535973;
+  --paperx-paper: #f2e9e4;
+  --paperx-surface: #fbf8f6;
+  --paperx-line: #d8cfca;
+  --paperx-lavender: #dee2ff;
+  --paperx-cream: #e7d8c9;
+  --paperx-silk: #e6beae;
+  --paperx-mist: #ecf8f8;
+  --paperx-blush: #efd3d7;
+}
+
+@media screen {
+  body { color: var(--paperx-ink); }
+}
+
 #root {
   min-height: 100vh;
 }
@@ -13,7 +32,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 28px 0;
-  border-bottom: 1px solid #c9ada7;
+  border-bottom: 1px solid var(--paperx-paper);
 }
 
 .brand {
@@ -24,7 +43,7 @@
 
 .header-label,
 .eyebrow {
-  color: #9a8c98;
+  color: var(--paperx-muted);
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -43,16 +62,16 @@
 
 .intro > p:last-child {
   max-width: 620px;
-  color: #595b70;
+  color: var(--paperx-muted);
   line-height: 1.6;
 }
 
 .panel {
   padding: 28px;
-  background: #fffaf8;
-  border: 1px solid #e6d7d4;
+  background: var(--paperx-surface);
+  border: 1px solid var(--paperx-line);
   border-radius: 18px;
-  box-shadow: 0 12px 35px #4a4e6910;
+  box-shadow: 0 12px 35px #14213d10;
 }
 
 h2 {
@@ -75,35 +94,53 @@ input {
   flex: 1;
   min-width: 0;
   padding: 14px 16px;
-  color: #4a4e69;
+  color: var(--paperx-action);
   background: white;
-  border: 1px solid #c9ada7;
+  border: 1px solid var(--paperx-paper);
   border-radius: 10px;
 }
 
 input:focus-visible,
 button:focus-visible {
-  outline: 3px solid #8e9aaf;
+  outline: 3px solid var(--paperx-steel);
   outline-offset: 2px;
 }
 
 button {
   padding: 14px 22px;
-  color: white;
-  background: #4a4e69;
-  border: 0;
+  color: var(--paperx-ink);
+  background: var(--button-fill, var(--paperx-cream));
+  border: 1px solid var(--paperx-line);
   border-radius: 10px;
   font-weight: 700;
   cursor: pointer;
 }
 
-button:hover {
-  background: #343850;
+@media (hover: hover) and (pointer: fine) {
+  button:hover:enabled,
+  .home .home-action:hover {
+    background: var(--button-hover, var(--paperx-paper));
+    border-color: #b2967d;
+    box-shadow: 0 2px 6px #14213d10;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  button:enabled,
+  .home .home-action {
+    transition: background-color 150ms ease, border-color 150ms ease,
+      box-shadow 150ms ease, transform 150ms ease;
+  }
+
+  button:hover:enabled,
+  .home .home-action:hover { transform: translateY(-1px); }
+  button:active:enabled,
+  .home .home-action:active { transform: none; }
 }
 
 button:disabled {
-  opacity: 0.6;
-  cursor: wait;
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .jobs-section {
@@ -118,7 +155,7 @@ button:disabled {
 
 .section-heading span,
 .job small {
-  color: #77788b;
+  color: var(--paperx-muted);
 }
 
 .job-list {
@@ -134,8 +171,8 @@ button:disabled {
   align-items: center;
   gap: 20px;
   padding: 20px 24px;
-  background: #fffaf8;
-  border: 1px solid #e6d7d4;
+  background: var(--paperx-surface);
+  border: 1px solid var(--paperx-line);
   border-radius: 12px;
 }
 
@@ -149,7 +186,7 @@ button:disabled {
 
 .status {
   padding: 7px 11px;
-  background: #efd3d7;
+  background: var(--paperx-lavender);
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 700;
@@ -158,8 +195,8 @@ button:disabled {
 
 .empty {
   padding: 28px;
-  background: #fffaf8;
-  border: 1px dashed #c9ada7;
+  background: var(--paperx-surface);
+  border: 1px dashed var(--paperx-paper);
   border-radius: 12px;
 }
 

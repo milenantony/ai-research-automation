@@ -37,7 +37,7 @@ from app.schemas.research import GapAnalysisRequest, GapAnalysisResponse
 from app.services.gap_analysis_service import generate_gap_analysis
 from app.services.gap_analysis_storage import save_gap_analysis
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.models.research_gap_analysis import ResearchGapAnalysis
 from app.schemas.research import SavedGapAnalysisResponse
@@ -428,9 +428,20 @@ async def search_research_job_papers(
     job = get_research_job(job_id=job_id, db=db)
 
     try:
-        search_query = job.topic
+        topic = job.topic
+        db.execute(
+            update(ResearchJob)
+            .where(
+                ResearchJob.id == job_id,
+                ResearchJob.status == ResearchJobStatus.PENDING.value,
+            )
+            .values(status=ResearchJobStatus.RUNNING.value)
+        )
+        db.commit()
+
+        search_query = topic
         if request.refine_query:
-            search_query = await PaperDiscoveryAgent().build_search_query(job.topic)
+            search_query = await PaperDiscoveryAgent().build_search_query(topic)
 
         papers = await PaperRetrievalService().search_and_save(
             db=db,
@@ -780,6 +791,9 @@ def generate_research_report(
             analysis=analysis,
             papers=papers,
         )
+        job.report_markdown = report
+        job.status = "COMPLETED"
+        db.commit()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -799,3 +813,10 @@ def generate_research_report(
         gap_analysis_id=analysis.id,
         report=report,
     )
+@router.get("/{job_id}/reports/latest")
+def get_latest_research_report(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, str | None]:
+    job = get_research_job(job_id=job_id, db=db)
+    return {"report": job.report_markdown}
