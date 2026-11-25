@@ -97,6 +97,9 @@ def test_create_research_job_database_failure(client, db_session, monkeypatch):
     rollback_mock.assert_called_once()
 
 def test_get_research_job_database_failure(client, db_session, monkeypatch):
+    job = client.post("/research-jobs", json={"topic": "Owned research"})
+    assert job.status_code == 201, job.text
+    job_id = job.json()["id"]
 
     # Simulate database query failure
     monkeypatch.setattr(
@@ -114,9 +117,7 @@ def test_get_research_job_database_failure(client, db_session, monkeypatch):
         rollback_mock,
     )
 
-    response = client.get(
-        "/research-jobs/00000000-0000-4000-8000-000000000000"
-    )
+    response = client.get(f"/research-jobs/{job_id}")
 
     # Verify HTTP 500
     assert response.status_code == 500

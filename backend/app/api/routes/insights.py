@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
+from app.services.account_security import require_job_access
 from app.models.research_job import ResearchJob
 from app.services.insight_extraction import (
     CitedInsight,
@@ -17,7 +18,9 @@ from app.services.llm_exceptions import LLMConfigurationError, LLMProviderError
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/research-jobs", tags=["Research Jobs"])
+router = APIRouter(
+    prefix="/research-jobs", tags=["Research Jobs"], dependencies=[Depends(require_job_access)]
+)
 
 
 class InsightExtractionRequest(BaseModel):

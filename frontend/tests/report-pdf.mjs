@@ -13,7 +13,7 @@ let browser
 try {
   browser = await chromium.launch({ executablePath: process.env.PAPERX_CHROMIUM_PATH })
   const page = await browser.newPage()
-  await page.route(/\/research-jobs(?:\/|\?|$)/, (route) => {
+  await page.route(/\/(?:research-jobs|auth\/session)(?:\/|\?|$)/, (route) => {
     const resource = new URL(route.request().url()).pathname
     return route.fulfill({ status: resource in responses ? 200 : 404, json: responses[resource] ?? {} })
   })
