@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import insert, text
@@ -35,8 +35,10 @@ class DeterministicEmbedder:
 def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
     db_session, client, monkeypatch
 ):
-    first_job = ResearchJob(topic="Solar forecasts")
-    second_job = ResearchJob(topic="Storage")
+    first_job_id = client.post("/research-jobs", json={"topic": "Solar forecasts"}).json()["id"]
+    second_job_id = client.post("/research-jobs", json={"topic": "Storage"}).json()["id"]
+    first_job = db_session.get(ResearchJob, UUID(first_job_id))
+    second_job = db_session.get(ResearchJob, UUID(second_job_id))
     solar = ResearchPaper(
         source="arxiv",
         external_id=str(uuid4()),
@@ -184,6 +186,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
 
     if fixture_path := os.getenv("PAPERX_REPORT_FIXTURE"):
         Path(fixture_path).write_text(json.dumps({
+            "/auth/session": client.get("/auth/session").json(),
             "/research-jobs": [client.get(root).json()],
             f"{root}/papers": client.get(f"{root}/papers").json(),
             f"{root}/summaries": summaries,

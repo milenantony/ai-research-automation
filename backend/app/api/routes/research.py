@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, status ,Query
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from app.dependencies import get_db
+from app.models.account import Account
 from app.models.research_job import ResearchJob
+from app.services.account_security import current_account, require_job_access
 from app.models.research_summary import ResearchSummary
 from app.models.research_summary_papers import research_summary_papers
 from app.schemas.research import SavedResearchSummaryResponse
@@ -52,6 +54,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/research-jobs",
     tags=["Research Jobs"],
+    dependencies=[Depends(require_job_access)],
 )
 
 
@@ -62,10 +65,12 @@ router = APIRouter(
 )
 def create_research_job(
     request: ResearchJobCreate,
+    account: Account = Depends(current_account),
     db: Session = Depends(get_db),
 ) -> ResearchJob:
     job = ResearchJob(
         topic=request.topic,
+        owner_id=account.id,
         status=ResearchJobStatus.PENDING.value,
     )
 
@@ -104,10 +109,11 @@ def get_research_jobs(
         alias="status",
     ),
     db: Session = Depends(get_db),
+    account: Account = Depends(current_account),
 ) -> list[ResearchJob]:
 
     try:
-        query = db.query(ResearchJob)
+        query = db.query(ResearchJob).filter(ResearchJob.owner_id == account.id)
 
         if job_status is not None:
             query = query.filter(

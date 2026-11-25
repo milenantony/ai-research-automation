@@ -1,5 +1,8 @@
 import pytest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from secrets import token_urlsafe
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -18,7 +21,8 @@ from fastapi.testclient import TestClient
 from app.database import engine
 from app.dependencies import get_db
 from app.main import app
-from app.models import ResearchJob
+from app.models import Account, AccountSession
+from app.services.account_security import SESSION_COOKIE, digest_token
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -53,7 +57,7 @@ def db_session():
 
 
 @pytest.fixture()
-def client(db_session):
+def anonymous_client(db_session):
     """Provide a test client connected to the isolated test session."""
 
     def override_get_db():
@@ -62,7 +66,21 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
 
     try:
-        with TestClient(app) as test_client:
+        with TestClient(app, base_url="http://localhost") as test_client:
             yield test_client
     finally:
         app.dependency_overrides.clear()
+
+@pytest.fixture()
+def client(anonymous_client, db_session):
+    account = Account(email=f"{uuid4()}@example.com", password_hash="unused")
+    db_session.add(account)
+    db_session.flush()
+    token = token_urlsafe(32)
+    db_session.add(AccountSession(
+        token_hash=digest_token(token), account_id=account.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    ))
+    db_session.flush()
+    anonymous_client.cookies.set(SESSION_COOKIE, token)
+    return anonymous_client

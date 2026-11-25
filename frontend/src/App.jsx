@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import AccountForm from './AccountForm.jsx'
 import './App.css'
 
 const markdownComponents = {
@@ -73,6 +74,50 @@ const jobStatusLabels = {
 }
 
 function App() {
+  const [account, setAccount] = useState(null)
+  const [sessionLoading, setSessionLoading] = useState(true)
+  const [sessionError, setSessionError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch('/auth/session', { signal: controller.signal })
+      .then(async (response) => {
+        if (response.status === 401) return null
+        if (!response.ok) throw new Error('Could not check your session.')
+        return response.json()
+      })
+      .then(setAccount)
+      .catch((failure) => {
+        if (failure.name !== 'AbortError') setSessionError(failure.message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSessionLoading(false)
+      })
+    return () => controller.abort()
+  }, [])
+
+  async function signOut() {
+    setSessionError('')
+    try {
+      const response = await fetch('/auth/session', { method: 'DELETE' })
+      if (!response.ok) throw new Error('Could not sign out. Please try again.')
+      setAccount(null)
+      window.location.hash = '#/workspace'
+    } catch (failure) {
+      setSessionError(failure.message)
+    }
+  }
+
+  return <WorkspaceApp key={account?.id ?? 'guest'} account={account}
+    sessionLoading={sessionLoading} sessionError={sessionError}
+    onSignIn={(nextAccount) => {
+      setSessionError('')
+      setAccount(nextAccount)
+    }}
+    onSignOut={signOut} />
+}
+
+function WorkspaceApp({ account, sessionLoading, sessionError, onSignIn, onSignOut }) {
   const [jobs, setJobs] = useState([])
   const [jobFilter, setJobFilter] = useState('')
   const [jobPage, setJobPage] = useState(1)
@@ -158,6 +203,7 @@ function App() {
   }
 
 useEffect(() => {
+  if (!account) return
   const controller = new AbortController()
 
   fetchAllPages('/research-jobs', 'Could not load research jobs.', controller.signal)
@@ -173,7 +219,7 @@ useEffect(() => {
     })
 
   return () => controller.abort()
-}, [])
+}, [account])
   async function createJob(event) {
     event.preventDefault()
     const trimmedTopic = topic.trim()
@@ -478,13 +524,27 @@ if (!route.startsWith('#/workspace')) {
     </main>
   )
 }
+  if (!account) {
+    return (
+      <main className="app">
+        <header className="header">
+          <span className="brand"><span className="brand-mark" aria-hidden="true">X</span>PaperX</span>
+          <a className="workspace-home-link" href="#">Home</a>
+        </header>
+        {sessionError && <p role="alert">{sessionError}</p>}
+        {sessionLoading ? <p role="status">Checking your session…</p> : <AccountForm onSignIn={onSignIn} />}
+      </main>
+    )
+  }
+
   return (
     <main className="app">
       <header className="header">
         <span className="brand"><span className="brand-mark" aria-hidden="true">X</span>PaperX</span>
         <a className="workspace-home-link" href="#">Home</a>
-        <span className="header-label">AI Research Workspace</span>
+        <button type="button" onClick={onSignOut}>Sign out</button>
       </header>
+      {sessionError && <p role="alert">{sessionError}</p>}
 
       {!activeJobId && <><section className="intro">
         <p className="eyebrow">YOUR RESEARCH, ORGANIZED</p>

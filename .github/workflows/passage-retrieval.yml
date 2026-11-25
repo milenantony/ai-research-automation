@@ -55,7 +55,7 @@ jobs:
       - name: Verify pgvector through saved report
         env:
           PAPERX_REPORT_FIXTURE: ${{ runner.temp }}/paperx-report.json
-        run: python -m pytest -q tests/test_passage_retrieval.py
+        run: python -m pytest -q tests/test_accounts.py tests/test_passage_retrieval.py
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
