@@ -340,6 +340,7 @@
     break-inside: avoid;
     break-after: avoid;
   }
+  .printable-report .reviewed-gaps-heading { break-before: page; }
   .report-body h2:first-child { margin-top: 0; }
   .report-body p { orphans: 3; widows: 3; }
   .markdown-table { overflow: visible; }

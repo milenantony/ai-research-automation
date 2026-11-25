@@ -34,7 +34,8 @@ from app.services.paper_service import PaperService
 from app.services.summary_service import save_linked_paper_summary
 from app.services.paper_discovery_agent import PaperDiscoveryAgent
 from app.schemas.research import GapAnalysisRequest, GapAnalysisResponse
-from app.services.gap_analysis_service import generate_gap_analysis
+from app.services.gap_analysis_service import generate_gap_analysis, generate_insight_backed_gaps
+from app.services.insight_extraction import passage_storage_available, retrieve_and_extract_insights
 from app.services.gap_analysis_storage import save_gap_analysis
 
 from sqlalchemy import select, update
@@ -634,17 +635,23 @@ def analyze_research_gaps(
     selected_papers = [papers_by_id[paper_id] for paper_id in request.paper_ids]
 
     try:
-        response = generate_gap_analysis(job.id, job.topic, selected_papers)
+        if passage_storage_available(db):
+            _, insights = retrieve_and_extract_insights(db, job.id, job.topic, request.paper_ids)
+            response = generate_insight_backed_gaps(job.id, job.topic, insights)
+        else:
+            response = generate_gap_analysis(job.id, job.topic, selected_papers)
         save_gap_analysis(db, response, request.paper_ids)
         db.commit()
         return response
     except LLMConfigurationError as exc:
+        db.rollback()
         logger.exception("Gap analysis configuration failed for job %s", job_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="LLM configuration error",
         ) from exc
     except LLMProviderError as exc:
+        db.rollback()
         logger.exception("Gap analysis generation failed for job %s", job_id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
