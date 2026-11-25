@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - '.github/workflows/passage-retrieval.yml'
   push:
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - '.github/workflows/passage-retrieval.yml'
   workflow_dispatch:
 
@@ -49,4 +51,35 @@ jobs:
           printf 'DATABASE_URL=%s\n' "$DATABASE_URL" > .env.test
           python -m alembic upgrade head
           docker exec -i ${{ job.services.postgres.id }} psql -v ON_ERROR_STOP=1 -U paperx -d paperx_test < sql/enable_passage_retrieval.sql
-      - run: python -m pytest -q tests/test_passage_retrieval.py
+      - name: Verify pgvector through saved report
+        env:
+          PAPERX_REPORT_FIXTURE: ${{ runner.temp }}/paperx-report.json
+        run: python -m pytest -q tests/test_passage_retrieval.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify saved report reload and PDF output
+        working-directory: frontend
+        run: |
+          npm ci
+          npm install --no-save --package-lock=false playwright@1.58.2
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y poppler-utils
+          node tests/report-pdf.mjs "$RUNNER_TEMP/paperx-report.json" "$RUNNER_TEMP/paperx-report.pdf"
+          pdftotext -layout "$RUNNER_TEMP/paperx-report.pdf" "$RUNNER_TEMP/paperx-report.txt"
+          python - "$RUNNER_TEMP/paperx-report.txt" <<'PY'
+          import sys
+          from pathlib import Path
+
+          pages = Path(sys.argv[1]).read_text(encoding="utf-8").split(chr(12))
+          assert "Research Report" in pages[0]
+          assert "Reviewed research gaps" not in pages[0]
+          reviewed_section = " ".join(" ".join(pages[1:]).split())
+          assert "Reviewed research gaps" in reviewed_section
+          assert "Assess transfer to other imagery sources." in reviewed_section
+          assert "solar forecasts from satellite imagery" in reviewed_section
+          assert "10.1234/solar" in reviewed_section
+          all_text = " ".join(" ".join(pages).split())
+          assert "Rejected control gap." not in all_text
+          assert "Save report as PDF" not in all_text
+          PY

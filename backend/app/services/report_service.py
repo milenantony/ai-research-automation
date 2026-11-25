@@ -1,3 +1,4 @@
+import re
 from uuid import UUID
 
 from app.models.research_gap_analysis import ResearchGapAnalysis
@@ -73,6 +74,15 @@ def build_report(
             f"Evidence from the supplied abstracts: {gap['evidence']} {citations}",
             "",
         ])
+        for insight in gap.get("cited_insights", []):
+            citation = citation_numbers[UUID(insight["paper_id"])]
+            quote = re.sub(r"([\\`*_{}\[\]()<>#+\-.!|~=&])", r"\\\1", insight["evidence_quote"])
+            lines.extend([
+                f"Abstract quote [{citation}]",
+                "",
+                *(f"> {line}" for line in quote.splitlines()),
+                "",
+            ])
 
     lines.extend([
         "## References",

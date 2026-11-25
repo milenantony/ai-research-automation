@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -96,7 +97,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         SELECT count(*) FROM research_abstract_passages WHERE job_id = :job_id
     """), {"job_id": first_job.id}) == 2
 
-    from app.services import gap_analysis_service, insight_extraction
+    from app.services import gap_analysis_service, insight_extraction, research_workflow
 
     monkeypatch.setattr(insight_extraction, "GeminiEmbeddingProvider", lambda: embedder)
     llm = Mock()
@@ -128,6 +129,12 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         "supporting_paper_ids": [str(solar.id)],
         "insight_numbers": [1],
         "review_status": "approved",
+    }, {
+        "category": "inferred_gap",
+        "description": "Rejected control gap.",
+        "evidence": "This proposal is excluded by the reviewer.",
+        "supporting_paper_ids": [str(solar.id)],
+        "insight_numbers": [1],
     }]})
     monkeypatch.setattr(gap_analysis_service, "LLMService", lambda: gap_llm)
     root = f"/research-jobs/{first_job.id}"
@@ -135,7 +142,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         f"{root}/papers:analyze-gaps", json={"paper_ids": [str(solar.id)]}
     )
     assert generated.status_code == 200, generated.text
-    gap, = generated.json()["gaps"]
+    gap, rejected_gap = generated.json()["gaps"]
     assert gap["review_status"] == "pending"
     assert gap["cited_insights"] == payload["insights"]
     assert "solar forecasts from satellite imagery" in gap_llm.generate.call_args.args[0]
@@ -145,7 +152,44 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         json={"gap_index": 0, "review_status": "approved"},
     )
     assert reviewed.status_code == 200, reviewed.text
-    assert reviewed.json()["gaps"] == [{**gap, "review_status": "approved"}]
+    assert reviewed.json()["gaps"] == [{**gap, "review_status": "approved"}, rejected_gap]
+    decision = client.patch(
+        f"{root}/gap-analyses/{saved['id']}/review",
+        json={"gap_index": 1, "review_status": "rejected"},
+    )
+    assert decision.status_code == 200, decision.text
+
+    summary_llm = Mock()
+    summary_llm.generate.return_value = "The study uses satellite imagery for solar forecasts."
+    monkeypatch.setattr(research_workflow, "LLMService", lambda: summary_llm)
+    summary = client.post(
+        f"{root}/papers:generate-summary", json={"paper_ids": [str(solar.id)]}
+    )
+    assert summary.status_code == 200, summary.text
+    summaries = client.get(f"{root}/summaries").json()
+    report = client.post(
+        f"{root}/reports:generate",
+        json={"summary_id": summaries[0]["id"], "gap_analysis_id": saved["id"]},
+    )
+    assert report.status_code == 200, report.text
+    latest = client.get(f"{root}/reports/latest")
+    assert latest.status_code == 200, latest.text
+    assert latest.json() == {"report": report.json()["report"]}
+    assert client.get(root).json()["status"] == "COMPLETED"
+    markdown = latest.json()["report"]
+    assert "Assess transfer to other imagery sources." in markdown
+    assert "> solar forecasts from satellite imagery" in markdown
+    assert "DOI: 10.1234/solar" in markdown
+    assert "Rejected control gap." not in markdown
+
+    if fixture_path := os.getenv("PAPERX_REPORT_FIXTURE"):
+        Path(fixture_path).write_text(json.dumps({
+            "/research-jobs": [client.get(root).json()],
+            f"{root}/papers": client.get(f"{root}/papers").json(),
+            f"{root}/summaries": summaries,
+            f"{root}/gap-analyses": client.get(f"{root}/gap-analyses").json(),
+            f"{root}/reports/latest": latest.json(),
+        }), encoding="utf-8")
 
     invalid_gap = json.loads(gap_llm.generate.return_value)
     invalid_gap["gaps"][0]["supporting_paper_ids"] = [str(battery.id)]

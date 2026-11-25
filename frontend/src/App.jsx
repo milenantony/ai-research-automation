@@ -5,6 +5,9 @@ import './App.css'
 
 const markdownComponents = {
   h1: ({ children }) => <h2>{children}</h2>,
+  h2: ({ children }) => (
+    <h2 className={children === 'Reviewed research gaps' ? 'reviewed-gaps-heading' : undefined}>{children}</h2>
+  ),
   table: ({ children }) => (
     <div className="markdown-table">
       <table>{children}</table>
