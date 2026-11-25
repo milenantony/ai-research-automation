@@ -621,6 +621,17 @@ if (!route.startsWith('#/workspace')) {
                               <strong>{gap.category.replaceAll('_', ' ')}</strong>
                               <p>{gap.description}</p>
                               <p className="gap-evidence"><strong>Evidence</strong> {gap.evidence}</p>
+                              {gap.cited_insights?.length > 0 && (
+                                <ul className="gap-citations" aria-label="Cited insights">
+                                  {gap.cited_insights.map((insight, index) => (
+                                    <li key={`${insight.paper_id}-${index}`}>
+                                      <strong>{insight.title}</strong>
+                                      <p>{insight.claim}</p>
+                                      <blockquote>{insight.evidence_quote}</blockquote>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
                               <p className="gap-review-status">Status: {gap.review_status}</p>
                               <button type="button" onClick={() => reviewGap(job.id, index, 'approved')}>
                                 Approve

@@ -4,6 +4,8 @@ from uuid import UUID
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.insight_extraction import CitedInsight
+
 class ResearchJobStatus(str, Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -72,6 +74,7 @@ class ResearchGap(BaseModel):
     description: str
     supporting_paper_ids: list[UUID] = Field(min_length=1)
     evidence: str
+    cited_insights: list[CitedInsight] = Field(default_factory=list)
     review_status: Literal["pending", "approved", "rejected"] = "pending"
 
 class GapAnalysisResponse(BaseModel):

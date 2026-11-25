@@ -96,9 +96,9 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         SELECT count(*) FROM research_abstract_passages WHERE job_id = :job_id
     """), {"job_id": first_job.id}) == 2
 
-    from app.api.routes import insights
+    from app.services import gap_analysis_service, insight_extraction
 
-    monkeypatch.setattr(insights, "GeminiEmbeddingProvider", lambda: embedder)
+    monkeypatch.setattr(insight_extraction, "GeminiEmbeddingProvider", lambda: embedder)
     llm = Mock()
     llm.generate.return_value = json.dumps({"insights": [{
         "category": "finding",
@@ -106,7 +106,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         "paper_id": str(solar.id),
         "evidence_quote": "solar forecasts from satellite imagery",
     }]})
-    monkeypatch.setattr(insights, "LLMService", lambda: llm)
+    monkeypatch.setattr(insight_extraction, "LLMService", lambda: llm)
 
     response = client.post(
         f"/research-jobs/{first_job.id}/papers:extract-insights",
@@ -119,6 +119,42 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
     assert payload["insights"][0]["evidence_quote"] == "solar forecasts from satellite imagery"
     assert payload["insights"][0]["paper_url"] == solar.paper_url
     assert "battery storage" not in llm.generate.call_args.args[0]
+
+    gap_llm = Mock()
+    gap_llm.generate.return_value = json.dumps({"gaps": [{
+        "category": "inferred_gap",
+        "description": "Assess transfer to other imagery sources.",
+        "evidence": "The supplied insight identifies satellite imagery.",
+        "supporting_paper_ids": [str(solar.id)],
+        "insight_numbers": [1],
+        "review_status": "approved",
+    }]})
+    monkeypatch.setattr(gap_analysis_service, "LLMService", lambda: gap_llm)
+    root = f"/research-jobs/{first_job.id}"
+    generated = client.post(
+        f"{root}/papers:analyze-gaps", json={"paper_ids": [str(solar.id)]}
+    )
+    assert generated.status_code == 200, generated.text
+    gap, = generated.json()["gaps"]
+    assert gap["review_status"] == "pending"
+    assert gap["cited_insights"] == payload["insights"]
+    assert "solar forecasts from satellite imagery" in gap_llm.generate.call_args.args[0]
+    saved, = client.get(f"{root}/gap-analyses").json()
+    reviewed = client.patch(
+        f"{root}/gap-analyses/{saved['id']}/review",
+        json={"gap_index": 0, "review_status": "approved"},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["gaps"] == [{**gap, "review_status": "approved"}]
+
+    invalid_gap = json.loads(gap_llm.generate.return_value)
+    invalid_gap["gaps"][0]["supporting_paper_ids"] = [str(battery.id)]
+    gap_llm.generate.return_value = json.dumps(invalid_gap)
+    rejected = client.post(
+        f"{root}/papers:analyze-gaps", json={"paper_ids": [str(solar.id)]}
+    )
+    assert rejected.status_code == 502, rejected.text
+    assert [item["id"] for item in client.get(f"{root}/gap-analyses").json()] == [saved["id"]]
 
     solar.abstract = "updated solar forecasts"
     db_session.flush()

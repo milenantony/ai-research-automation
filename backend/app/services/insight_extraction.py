@@ -1,12 +1,16 @@
 import json
 
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
 from pydantic import BaseModel, StringConstraints, ValidationError
 from typing import Annotated, Literal
 from uuid import UUID
 
 from app.services.llm_exceptions import LLMProviderError
 from app.services.llm_service import LLMService
-from app.services.passage_retrieval import RetrievedPassage
+from app.services.passage_retrieval import PassageRetrieval, RetrievedPassage
+from app.services.providers.gemini_embeddings import GeminiEmbeddingProvider
 
 
 Nonblank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -29,6 +33,20 @@ class CitedInsight(Insight):
     external_id: str
     paper_url: str | None
     doi: str | None
+
+
+def passage_storage_available(db: Session) -> bool:
+    return bool(db.scalar(text("SELECT to_regclass('research_abstract_passages')")))
+
+
+def retrieve_and_extract_insights(
+    db: Session, job_id: UUID, topic: str, paper_ids: list[UUID], *, limit: int = 5
+) -> tuple[list[RetrievedPassage], list[CitedInsight]]:
+    retrieval = PassageRetrieval(db, GeminiEmbeddingProvider())
+    retrieval.ingest(job_id, paper_ids)
+    passages = retrieval.retrieve(job_id, paper_ids, topic, limit=limit)
+    db.commit()
+    return passages, extract_insights(topic, passages, LLMService()) if passages else []
 
 
 def extract_insights(

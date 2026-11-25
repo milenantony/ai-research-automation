@@ -3,17 +3,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.models.research_job import ResearchJob
-from app.services.insight_extraction import CitedInsight, extract_insights
+from app.services.insight_extraction import (
+    CitedInsight,
+    passage_storage_available,
+    retrieve_and_extract_insights,
+)
 from app.services.llm_exceptions import LLMConfigurationError, LLMProviderError
-from app.services.llm_service import LLMService
-from app.services.passage_retrieval import PassageRetrieval
-from app.services.providers.gemini_embeddings import GeminiEmbeddingProvider
 
 
 logger = logging.getLogger(__name__)
@@ -43,20 +43,19 @@ def extract_paper_insights(
         raise HTTPException(400, "Selected paper IDs must be unique")
 
     try:
-        if not db.scalar(text("SELECT to_regclass('research_abstract_passages')")):
+        if not passage_storage_available(db):
             raise HTTPException(503, "Passage retrieval is unavailable on this database")
 
         topic = job.topic
-        retrieval = PassageRetrieval(db, GeminiEmbeddingProvider())
-        retrieval.ingest(job_id, request.paper_ids)
-        passages = retrieval.retrieve(job_id, request.paper_ids, topic, limit=request.limit)
-        db.commit()
+        passages, insights = retrieve_and_extract_insights(
+            db, job_id, topic, request.paper_ids, limit=request.limit
+        )
 
         return InsightExtractionResponse(
             job_id=job_id,
             topic=topic,
             retrieved_paper_ids=[passage.paper_id for passage in passages],
-            insights=extract_insights(topic, passages, LLMService()) if passages else [],
+            insights=insights,
         )
     except LLMConfigurationError as exc:
         db.rollback()
