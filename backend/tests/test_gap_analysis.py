@@ -10,10 +10,86 @@ from app.services.paper_service import PaperService
 import pytest
 from uuid import uuid4
 
-from app.services.gap_analysis_service import parse_gap_analysis
+from app.services.gap_analysis_service import generate_insight_backed_gaps, parse_gap_analysis
+from app.services.insight_extraction import CitedInsight
 from app.services.llm_exceptions import LLMProviderError
 
 
+
+
+@pytest.mark.parametrize(
+    ("wrapper", "case", "error"),
+    [
+        ("{}", "empty", None),
+        ("```json\n{}\n```", "empty", None),
+        (" \n```json\r\n{}\r\n```\n ", "cited", None),
+        ("```json\n{}\n```", "invalid_schema", "Invalid insight-backed gap response"),
+        ("```json\n{}\n```", "corrected_evidence", None),
+        ("```json\n{}\n```", "unknown_insight", "unknown insight"),
+        ("```json\n{}\n```", "wrong_paper", "paper citations do not match"),
+        ("Here is the result:\n```json\n{}\n```", "empty", "Invalid insight-backed gap response"),
+        ("```json\n{}\n```\n```json\n{{}}\n```", "empty", "Invalid insight-backed gap response"),
+    ],
+)
+def test_insight_backed_gap_response(monkeypatch, wrapper, case, error):
+    job_id = uuid4()
+    insight = CitedInsight(
+        category="limitation",
+        claim="The evaluation was limited to one site.",
+        paper_id=uuid4(),
+        evidence_quote="The evaluation was limited to one site.",
+        title="Solar study",
+        source="arxiv",
+        external_id="solar-study",
+        paper_url=None,
+        doi=None,
+    )
+    gap = {
+        "category": "author_reported_limitation",
+        "description": insight.claim,
+        "evidence": insight.evidence_quote,
+        "supporting_paper_ids": [str(insight.paper_id)],
+        "insight_numbers": [1],
+    }
+    if case == "invalid_schema":
+        del gap["insight_numbers"]
+    elif case == "unknown_insight":
+        gap["insight_numbers"] = [2]
+    elif case == "wrong_paper":
+        gap["supporting_paper_ids"] = [str(uuid4())]
+
+    payload = wrapper.format(json.dumps({"gaps": [] if case == "empty" else [gap]}))
+    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
+    prompts = []
+
+    def generate(self, prompt):
+        prompts.append(prompt)
+        if case == "corrected_evidence" and len(prompts) == 1:
+            incomplete_gap = {key: value for key, value in gap.items() if key != "evidence"}
+            return wrapper.format(json.dumps({"gaps": [incomplete_gap]}))
+        return payload
+
+    monkeypatch.setattr(LLMService, "generate", generate)
+    if error:
+        with pytest.raises(LLMProviderError, match=error):
+            generate_insight_backed_gaps(job_id, "Solar forecasting", [insight])
+        return
+
+    result = generate_insight_backed_gaps(job_id, "Solar forecasting", [insight])
+    assert result.job_id == job_id
+    if case == "corrected_evidence":
+        assert len(prompts) == 2
+        assert 'especially "evidence"' in prompts[1]
+        assert result.gaps[0].evidence == insight.evidence_quote
+    else:
+        assert len(prompts) == 1
+    if case == "empty":
+        assert result.gaps == []
+    else:
+        cited_gap, = result.gaps
+        assert cited_gap.review_status == "pending"
+        assert cited_gap.supporting_paper_ids == [insight.paper_id]
+        assert cited_gap.cited_insights == [insight]
 
 
 def test_gap_analysis_uses_selected_papers_in_order(

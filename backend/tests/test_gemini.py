@@ -21,9 +21,12 @@ def test_provider_initialization(mock_client):
         provider = GeminiProvider()
 
     assert provider.model == "gemini-3.6-flash"
-    mock_client.assert_called_once_with(
-        api_key="test-api-key"
-    )
+    mock_client.assert_called_once()
+    options = mock_client.call_args.kwargs
+    assert options["api_key"] == "test-api-key"
+    retry = options["http_options"].retry_options
+    assert retry.attempts == 3
+    assert retry.http_status_codes == [503]
 
 
 @patch("app.services.providers.gemini.genai.Client")
