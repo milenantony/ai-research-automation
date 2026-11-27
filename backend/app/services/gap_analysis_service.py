@@ -1,6 +1,7 @@
 from app.models.research_paper import ResearchPaper
 import json
 import re
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 from app.services.llm_service import LLMService
 
@@ -127,11 +128,12 @@ class InsightBackedGapBatch(BaseModel):
     gaps: list[InsightBackedGap]
 
 
-def generate_insight_backed_gaps(
-    job_id: UUID, topic: str, insights: list[CitedInsight]
+async def generate_insight_backed_gaps(
+    job_id: UUID,
+    topic: str,
+    insights: list[CitedInsight],
+    generate: Callable[[str], Awaitable[str]],
 ) -> GapAnalysisResponse:
-    if not insights:
-        return GapAnalysisResponse(job_id=job_id, topic=topic, gaps=[])
 
     context = json.dumps({
         number: insight.model_dump(mode="json")
@@ -158,9 +160,8 @@ gap in the broader literature. Return an empty array if evidence is insufficient
 Topic: {json.dumps(topic, ensure_ascii=False)}
 Numbered insights: {context}
 """
-    llm = LLMService()
     for attempt in range(2):
-        raw_response = llm.generate(prompt).strip()
+        raw_response = (await generate(prompt)).strip()
         fenced_json = re.fullmatch(
             r"```json[ \t]*\r?\n(.*)\r?\n```", raw_response, re.DOTALL | re.IGNORECASE
         )
