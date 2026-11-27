@@ -1,6 +1,7 @@
 from app.services.research_workflow import ResearchWorkflow
 import logging
 from uuid import UUID
+from anyio import from_thread
 from fastapi import APIRouter, Depends, HTTPException, status ,Query
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -36,7 +37,8 @@ from app.services.paper_service import PaperService
 from app.services.summary_service import save_linked_paper_summary
 from app.services.paper_discovery_agent import PaperDiscoveryAgent
 from app.schemas.research import GapAnalysisRequest, GapAnalysisResponse
-from app.services.gap_analysis_service import generate_gap_analysis, generate_insight_backed_gaps
+from app.services.gap_analysis_agent import GapAnalysisAgent
+from app.services.gap_analysis_service import generate_gap_analysis
 from app.services.insight_extraction import passage_storage_available, retrieve_and_extract_insights
 from app.services.gap_analysis_storage import save_gap_analysis
 
@@ -643,7 +645,7 @@ def analyze_research_gaps(
     try:
         if passage_storage_available(db):
             _, insights = retrieve_and_extract_insights(db, job.id, job.topic, request.paper_ids)
-            response = generate_insight_backed_gaps(job.id, job.topic, insights)
+            response = from_thread.run(GapAnalysisAgent().run, job.id, job.topic, insights)
         else:
             response = generate_gap_analysis(job.id, job.topic, selected_papers)
         save_gap_analysis(db, response, request.paper_ids)

@@ -31,7 +31,8 @@ from app.services.llm_exceptions import LLMProviderError
         ("```json\n{}\n```\n```json\n{{}}\n```", "empty", "Invalid insight-backed gap response"),
     ],
 )
-def test_insight_backed_gap_response(monkeypatch, wrapper, case, error):
+@pytest.mark.asyncio
+async def test_insight_backed_gap_response(wrapper, case, error):
     job_id = uuid4()
     insight = CitedInsight(
         category="limitation",
@@ -59,23 +60,21 @@ def test_insight_backed_gap_response(monkeypatch, wrapper, case, error):
         gap["supporting_paper_ids"] = [str(uuid4())]
 
     payload = wrapper.format(json.dumps({"gaps": [] if case == "empty" else [gap]}))
-    monkeypatch.setattr(LLMService, "__init__", lambda self: None)
     prompts = []
 
-    def generate(self, prompt):
+    async def generate(prompt):
         prompts.append(prompt)
         if case == "corrected_evidence" and len(prompts) == 1:
             incomplete_gap = {key: value for key, value in gap.items() if key != "evidence"}
             return wrapper.format(json.dumps({"gaps": [incomplete_gap]}))
         return payload
 
-    monkeypatch.setattr(LLMService, "generate", generate)
     if error:
         with pytest.raises(LLMProviderError, match=error):
-            generate_insight_backed_gaps(job_id, "Solar forecasting", [insight])
+            await generate_insight_backed_gaps(job_id, "Solar forecasting", [insight], generate)
         return
 
-    result = generate_insight_backed_gaps(job_id, "Solar forecasting", [insight])
+    result = await generate_insight_backed_gaps(job_id, "Solar forecasting", [insight], generate)
     assert result.job_id == job_id
     if case == "corrected_evidence":
         assert len(prompts) == 2

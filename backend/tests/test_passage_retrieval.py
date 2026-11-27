@@ -1,7 +1,8 @@
 import json
 import os
 from pathlib import Path
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -99,7 +100,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         SELECT count(*) FROM research_abstract_passages WHERE job_id = :job_id
     """), {"job_id": first_job.id}) == 2
 
-    from app.services import gap_analysis_service, insight_extraction, research_workflow
+    from app.services import gap_analysis_agent, insight_extraction, research_workflow
 
     monkeypatch.setattr(insight_extraction, "GeminiEmbeddingProvider", lambda: embedder)
     llm = Mock()
@@ -123,8 +124,8 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
     assert payload["insights"][0]["paper_url"] == solar.paper_url
     assert "battery storage" not in llm.generate.call_args.args[0]
 
-    gap_llm = Mock()
-    gap_llm.generate.return_value = json.dumps({"gaps": [{
+    gap_agent = AsyncMock()
+    gap_agent.run.return_value = SimpleNamespace(text=json.dumps({"gaps": [{
         "category": "inferred_gap",
         "description": "Assess transfer to other imagery sources.",
         "evidence": "The supplied insight identifies satellite imagery.",
@@ -137,8 +138,10 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
         "evidence": "This proposal is excluded by the reviewer.",
         "supporting_paper_ids": [str(solar.id)],
         "insight_numbers": [1],
-    }]})
-    monkeypatch.setattr(gap_analysis_service, "LLMService", lambda: gap_llm)
+    }]}))
+    monkeypatch.setattr(gap_analysis_agent, "GeminiProvider", Mock())
+    monkeypatch.setattr(gap_analysis_agent, "GeminiChatClient", Mock())
+    monkeypatch.setattr(gap_analysis_agent, "Agent", Mock(return_value=gap_agent))
     root = f"/research-jobs/{first_job.id}"
     generated = client.post(
         f"{root}/papers:analyze-gaps", json={"paper_ids": [str(solar.id)]}
@@ -147,7 +150,7 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
     gap, rejected_gap = generated.json()["gaps"]
     assert gap["review_status"] == "pending"
     assert gap["cited_insights"] == payload["insights"]
-    assert "solar forecasts from satellite imagery" in gap_llm.generate.call_args.args[0]
+    assert "solar forecasts from satellite imagery" in gap_agent.run.await_args.args[0]
     saved, = client.get(f"{root}/gap-analyses").json()
     reviewed = client.patch(
         f"{root}/gap-analyses/{saved['id']}/review",
@@ -194,9 +197,9 @@ def test_selected_abstracts_are_embedded_once_and_retrieved_in_scope(
             f"{root}/reports/latest": latest.json(),
         }), encoding="utf-8")
 
-    invalid_gap = json.loads(gap_llm.generate.return_value)
+    invalid_gap = json.loads(gap_agent.run.return_value.text)
     invalid_gap["gaps"][0]["supporting_paper_ids"] = [str(battery.id)]
-    gap_llm.generate.return_value = json.dumps(invalid_gap)
+    gap_agent.run.return_value = SimpleNamespace(text=json.dumps(invalid_gap))
     rejected = client.post(
         f"{root}/papers:analyze-gaps", json={"paper_ids": [str(solar.id)]}
     )
