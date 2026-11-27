@@ -16,6 +16,23 @@ from app.services.paper_retrieval.semantic_scholar import (
 )
 
 
+@pytest.mark.parametrize(
+    ("configured_key", "expected_key"),
+    [(None, None), ("  ", None), (" test-api-key ", "test-api-key")],
+)
+def test_default_semantic_scholar_client_uses_optional_key(
+    monkeypatch, configured_key, expected_key
+):
+    if configured_key is None:
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", configured_key)
+
+    service = PaperRetrievalService()
+
+    assert service.semantic_scholar_client.api_key == expected_key
+
+
 @pytest.fixture
 def mock_clients():
     arxiv = AsyncMock()

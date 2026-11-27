@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import os
 from sqlalchemy.orm import Session
 from app.models.research_paper import ResearchPaper
 from app.services.paper_service import PaperService
@@ -35,7 +36,9 @@ class PaperRetrievalService:
         self.semantic_scholar_client = (
             semantic_scholar_client
             if semantic_scholar_client is not None
-            else SemanticScholarClient()
+            else SemanticScholarClient(
+                api_key=os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip() or None
+            )
         )
 
     async def search(
