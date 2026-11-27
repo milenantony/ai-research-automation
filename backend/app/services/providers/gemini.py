@@ -19,7 +19,17 @@ class GeminiProvider:
         )
 
         try:
-            self.client = genai.Client(api_key=api_key)
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=genai.types.HttpOptions(
+                    retry_options=genai.types.HttpRetryOptions(
+                        attempts=3,
+                        initial_delay=1,
+                        max_delay=4,
+                        http_status_codes=[503],
+                    ),
+                ),
+            )
         except Exception as exc:
             raise LLMConfigurationError(
                 "Failed to initialize Gemini client"

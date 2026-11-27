@@ -72,19 +72,31 @@ Omit unsupported claims. Return an empty array if the evidence is insufficient.
 Topic: {json.dumps(topic, ensure_ascii=False)}
 Passages: {evidence}
 """
-    raw = llm.generate(prompt).strip()
-    if raw.startswith("```json\n") and raw.endswith("```"):
-        raw = raw.removeprefix("```json\n").removesuffix("```").strip()
-    try:
-        batch = InsightBatch.model_validate_json(raw)
-    except ValidationError as exc:
-        raise LLMProviderError("Invalid insight extraction response") from exc
+    correction = (
+        "A citation in the previous response did not match the supplied passage. "
+        "Copy a short exact substring, preserving whitespace and punctuation, "
+        "and verify its paper UUID. Omit any insight without an exact quote."
+    )
+    for retry_instruction in ("", correction):
+        raw = llm.generate(f"{prompt}\n{retry_instruction}" if retry_instruction else prompt).strip()
+        if raw.startswith("```json\n") and raw.endswith("```"):
+            raw = raw.removeprefix("```json\n").removesuffix("```").strip()
+        try:
+            batch = InsightBatch.model_validate_json(raw)
+        except ValidationError as exc:
+            raise LLMProviderError("Invalid insight extraction response") from exc
+        if all(
+            insight.paper_id in sources
+            and insight.evidence_quote in sources[insight.paper_id].passage_text
+            for insight in batch.insights
+        ):
+            break
+    else:
+        raise LLMProviderError("Insight citation does not match the retrieved evidence")
 
     insights = []
     for insight in batch.insights:
-        passage = sources.get(insight.paper_id)
-        if passage is None or insight.evidence_quote not in passage.passage_text:
-            raise LLMProviderError("Insight citation does not match the retrieved evidence")
+        passage = sources[insight.paper_id]
         insights.append(CitedInsight(
             **insight.model_dump(),
             title=passage.title,
